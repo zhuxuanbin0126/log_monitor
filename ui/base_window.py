@@ -1,12 +1,13 @@
 from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QSplitter, QStatusBar
 from PyQt5.QtCore import Qt
+from config import VERSION
 
 class BaseWindow(QMainWindow):
     """基础窗口类，提供基本的窗口设置和布局"""
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("设备监控系统")
+        self.setWindowTitle("设备监控系统 V"+VERSION)
         self.resize(960, 800)
         
         # 设置中心部件

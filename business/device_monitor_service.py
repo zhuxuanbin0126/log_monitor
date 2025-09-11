@@ -20,7 +20,33 @@ class DeviceMonitorService:
         os.makedirs(self.base_dir, exist_ok=True)
         self.device_data = FileService.load_device_data()
         self.notepad_process = None  # 用于跟踪记事本进程
-    
+    def count_init_setting(self,ip, password, device_id):
+        """
+        设备初始化设置开关机
+        """
+        try:
+            ToolService.initialize_connection(ip, password)
+            if device_id.split('-')[0] == "C16H":
+                ToolService.ssh_execute_command(ip, password, "touch /data/swich_counter_flag", ".")
+            elif device_id.split('-')[0] in [ "C16L", "C08L", "D16", "D36" ]:
+                ToolService.pscp_push_file(ip, password, "boot_counter/boot_counter.sh", "/root")
+                ToolService.pscp_push_file(ip, password, "boot_counter/run.sh", "/root/Box")
+                ToolService.ssh_execute_command(ip, password, "touch /root/Box/project/swich_counter_flag", ".")
+                ToolService.ssh_execute_command(ip, password, "chmod +x /root/boot_counter.sh & chmod +x /root/Box/run.sh", ".")
+            elif device_id.split('-')[0] in [ "A4L", "A5L", "A6L", "B6L" ]:
+                ToolService.adb_push_file(ip, password, "boot_counter/boot_counter.sh", "/system/bin/")
+                ToolService.adb_push_file(ip, password, "boot_counter/init.huidu.rc", "/vendor/etc/init/hw")
+                ToolService.ssh_execute_command(ip, password, "touch /data/swich_counter_flag", ".")
+            elif device_id.split('-')[0] in [ "H4K", "H6", "H8", "B8L" ]:
+                ToolService.adb_push_file(ip, password, "boot_counter/boot_counter.sh", "/system/bin/")
+                ToolService.adb_push_file(ip, password, "boot_counter/init.rk356x.rc", "/vendor/etc/init/hw")
+                ToolService.ssh_execute_command(ip, password, "touch /data/swich_counter_flag", ".")
+
+            return f"{device_id} 设置开关机成功"
+        except Exception as e:
+            return f"{device_id} 设置开关机失败 - {str(e)}"
+
+
     def get_uptime_info(self, ip, password, device_id):
         """
         获取设备运行时间信息

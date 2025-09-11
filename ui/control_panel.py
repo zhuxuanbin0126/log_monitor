@@ -120,10 +120,14 @@ class ControlPanel(QWidget):
         self.query_start_count_button = QPushButton("播放器启动次数")
         self.query_start_count_button.clicked.connect(lambda: self.query_selected_clicked.emit("start_count"))
         
+        self.query_count_init_button = QPushButton("开关机初始化")
+        self.query_count_init_button.clicked.connect(lambda: self.query_selected_clicked.emit("count_init"))
+
         query_layout.addWidget(self.query_all_button)
         query_layout.addWidget(self.query_time_button)
         query_layout.addWidget(self.query_boot_button)
         query_layout.addWidget(self.query_start_count_button)
+        query_layout.addWidget(self.query_count_init_button)
         query_layout.addStretch()
         
         parent_layout.addWidget(self.query_group)

@@ -10,6 +10,7 @@ from .device_list_view import DeviceListView
 from .result_display_view import ResultDisplayView
 from .monitor_thread import MonitorThread
 from .query_thread import QueryThread
+from .reflash_device_thread import ReflashThread
 
 from service.tool_service import ToolService
 from service.file_service import FileService
@@ -34,10 +35,10 @@ class MainWindow(BaseWindow):
         FileService.init_log_files(base_dir)
         
         # 自动刷新设备列表的定时器
-        self.auto_refresh_timer = QTimer(self)
-        self.auto_refresh_timer.setInterval(60000)  # 默认60秒刷新一次
-        self.auto_refresh_timer.timeout.connect(self.refresh_device_list)
-        self.auto_refresh_timer.start()  # 启动自动刷新
+        # self.auto_refresh_timer = QTimer(self)
+        # self.auto_refresh_timer.setInterval(60000)  # 默认60秒刷新一次
+        # self.auto_refresh_timer.timeout.connect(self.refresh_device_list)
+        # self.auto_refresh_timer.start()  # 启动自动刷新
         
         # 创建并初始化各个组件
         self.init_components()
@@ -48,6 +49,8 @@ class MainWindow(BaseWindow):
         # 完成布局
         self.finalize_layout()
         
+        self.find_dev_Thread = None
+
     def init_components(self):
         """初始化各个组件"""
         # 创建控制面板
@@ -215,7 +218,7 @@ class MainWindow(BaseWindow):
         self.control_panel.set_monitor_status(True)
         
         # 暂停自动刷新
-        self.auto_refresh_timer.stop()
+        # self.auto_refresh_timer.stop()
         
         self.log(f"开始监控 {self.dev_type} 类型设备，查询间隔为 {delay_time} 秒")
     
@@ -231,7 +234,7 @@ class MainWindow(BaseWindow):
                 self.control_panel.set_monitor_status(False)
                 
                 # 恢复自动刷新
-                self.auto_refresh_timer.start()
+                # self.auto_refresh_timer.start()
                 
                 self.log("监控已停止")
         except Exception as e:
@@ -325,7 +328,7 @@ class MainWindow(BaseWindow):
                     new_selected.add(device_id)
             self.device_list_view.set_selected_devices(new_selected)
 
-    def update_device_list(self, devices):
+    def update_device_list(self, devices:list):
         """更新设备列表"""
         # 保持已选设备的选择状态
         current_selected = self.device_list_view.get_selected_devices().copy()
@@ -397,6 +400,8 @@ class MainWindow(BaseWindow):
             return "启动时间"
         elif query_type == "start_count":
             return "播放器启动次数"
+        elif query_type == "count_init":
+            return "开关机初始化"
         return "未知"
     
     def on_query_result(self, device_id, results):
@@ -439,7 +444,10 @@ class MainWindow(BaseWindow):
                 except (ValueError, TypeError):
                     # 如果无法转换为整数，说明是错误信息，不进行异常判断
                     pass
-                
+        
+        if "count_init" in results:
+            print("zrh on_query_result count_init",results["count_init"])
+            self.log(f"设备系统类型: {results['count_init']}")
     def on_monitor_result(self, device_data):
         """处理监控结果并自动导出到Excel"""
         try:
@@ -657,7 +665,7 @@ class MainWindow(BaseWindow):
     def closeEvent(self, event):
         """窗口关闭时的处理"""
         self.stop_monitor()
-        self.auto_refresh_timer.stop()  # 停止自动刷新定时器
+        # self.auto_refresh_timer.stop()  # 停止自动刷新定时器
         for thread in self.query_threads:
             if thread.isRunning():
                 thread.quit()
@@ -666,23 +674,14 @@ class MainWindow(BaseWindow):
     
     def refresh_device_list(self):
         """刷新设备列表"""
-        from service.tool_service import ToolService
-        try:
-            # 获取当前设备类型
-            dev_type = self.control_panel.dev_type
-            
-            # 使用ToolService获取设备列表
-            devices = ToolService.get_device_list(dev_type)
-            
-            # 更新设备列表
-            self.update_device_list(devices)
-            
-            # 更新刷新状态标签
-            self.control_panel.update_refresh_status(f"当前设备数: {len(devices)}")
-            
-            self.log(f"设备列表已刷新，共 {len(devices)} 台设备")
-        except Exception as e:
-            self.log(f"刷新设备列表失败: {str(e)}", is_error=True)
+
+        if not self.find_dev_Thread or not self.find_dev_Thread.isRunning():
+            self.log("正在刷新设备列表...")
+            self.find_dev_Thread=ReflashThread(self.control_panel,self.update_device_list)
+            # self.find_dev_Thread.finished.connect(self.find_dev_Thread.quit)
+            self.find_dev_Thread.error_signal.connect(lambda msg: self.log(msg, is_error=True))
+            self.find_dev_Thread.success_signal.connect(lambda msg: self.log(msg, is_error=False))
+            self.find_dev_Thread.start()
 
     def monitor_device(self, device):
         """监控单个设备"""

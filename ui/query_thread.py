@@ -36,6 +36,10 @@ class QueryThread(QThread):
             if self.query_type == "all" or self.query_type == "start_count":
                 start_count = monitor_service.get_start_count(self.ip, self.password, self.device_id)
                 results['start_count'] = start_count
+
+            if  self.query_type == "count_init":
+                count_init = monitor_service.count_init_setting(self.ip, self.password, self.device_id)
+                results['count_init'] = count_init
             
             self.result_signal.emit(self.device_id, results)
         except Exception as e:

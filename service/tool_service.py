@@ -145,3 +145,35 @@ class ToolService:
         cmd = f'echo y | plink -l root -pw "{password}" "{ip}" "exit"'
         stdout, stderr, returncode = ToolService.run_command(cmd)
         return stdout, stderr, returncode
+
+    @staticmethod
+    def adb_push_file(ip, password, local_file, remote_file):
+        """
+        使用adb将文件推送到远程设备
+        """
+        cmd = f'adb -s {ip} connect {ip}:5555'
+        stdout, stderr, returncode = ToolService.run_command(cmd)
+        if not stderr:
+            cmd = f"adb -s {ip} root & adb -s {ip} remount"
+            stdout, stderr, returncode = ToolService.run_command(cmd)
+            if not  stderr:
+                cmd = f'adb -s {ip} push {local_file} {remote_file}'
+                stdout, stderr, returncode = ToolService.run_command(cmd)
+                if not stderr:
+                    return stdout
+            else:
+                cmd="adb disconnect"
+                ToolService.run_command(cmd)
+        return stderr
+
+    @staticmethod
+    def pscp_push_file(ip, password, local_file, remote_file):
+        """
+        使用pscp将文件推送到远程设备
+        """
+        cmd = f'pscp -pw "{password}" {local_file} root@{ip}:{remote_file}'
+        stdout, stderr, returncode = ToolService.run_command(cmd)
+        if not stderr:
+            return stdout
+        else:
+            return stderr
