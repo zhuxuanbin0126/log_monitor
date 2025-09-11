@@ -1,0 +1,719 @@
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QTimer
+from datetime import datetime
+import os
+import re
+
+from .base_window import BaseWindow
+from .control_panel import ControlPanel
+from .device_list_view import DeviceListView
+from .result_display_view import ResultDisplayView
+from .monitor_thread import MonitorThread
+from .query_thread import QueryThread
+
+from service.tool_service import ToolService
+from service.file_service import FileService
+from service.data_processing_service import DataProcessingService
+from config import get_base_dir
+
+class MainWindow(BaseWindow):
+    """主窗口类，作为控制器协调各个组件的工作"""
+    
+    def __init__(self):
+        super().__init__()
+        
+        # 初始化变量
+        self.monitor_thread = None
+        self.query_threads = []
+        self.dev_type = ControlPanel().dev_type
+        self.notepad_process = None  # 用于跟踪记事本进程
+        self.excel_file = None  # 用于存储当前使用的Excel文件名
+        
+        # 初始化日志文件
+        base_dir = get_base_dir(self.dev_type)
+        FileService.init_log_files(base_dir)
+        
+        # 自动刷新设备列表的定时器
+        self.auto_refresh_timer = QTimer(self)
+        self.auto_refresh_timer.setInterval(60000)  # 默认60秒刷新一次
+        self.auto_refresh_timer.timeout.connect(self.refresh_device_list)
+        self.auto_refresh_timer.start()  # 启动自动刷新
+        
+        # 创建并初始化各个组件
+        self.init_components()
+        
+        # 连接信号和槽
+        self.connect_signals_slots()
+        
+        # 完成布局
+        self.finalize_layout()
+        
+    def init_components(self):
+        """初始化各个组件"""
+        # 创建控制面板
+        self.control_panel = ControlPanel()
+        
+        # 创建设备列表视图
+        self.device_list_view = DeviceListView()
+        
+        # 创建结果显示视图
+        self.result_display_view = ResultDisplayView()
+        
+        # 添加控制面板到主布局
+        self.main_layout.addWidget(self.control_panel)
+        
+        # 添加设备列表和结果显示到分割器
+        self.add_widget_to_splitter(self.device_list_view)
+        self.add_widget_to_splitter(self.result_display_view)
+        
+    def connect_signals_slots(self):
+        """连接信号与槽"""
+        # 控制面板信号连接
+        self.control_panel.refresh_button.clicked.connect(self.refresh_device_list)
+        self.control_panel.dev_type_combo.currentTextChanged.connect(self.on_dev_type_changed)
+        # 修复：连接到正确的start_monitor_clicked信号，而不是按钮的clicked信号
+        self.control_panel.start_monitor_clicked.connect(self.start_monitor)
+        self.control_panel.stop_monitor_button.clicked.connect(self.stop_monitor)
+        # 添加查询信号连接
+        self.control_panel.query_selected_clicked.connect(self.query_selected)
+        
+        # 设备列表信号连接
+        self.device_list_view.device_selected.connect(self.on_device_selected)
+        self.device_list_view.device_list_updated.connect(self.on_device_list_updated)
+        
+        # 结果显示信号连接
+        self.result_display_view.clear_log_clicked.connect(self.on_clear_log)
+
+    def handle_error(self, error_msg, device_id, ip):
+        """处理监控线程发送的错误信号"""
+        # 优化错误消息显示
+        optimized_msg = self._optimize_error_message(error_msg)
+        self.log(optimized_msg, is_error=True)
+        # 调用同名的write_to_error_log方法
+        self.write_to_error_log(error_msg, device_id=device_id, ip=ip)
+        # 写入错误日志后自动打开记事本
+        self.open_error_log_in_notepad()
+    
+    def write_to_error_log(self, message=None, device_id=None, ip=None, password=None, errors=None):
+        """写入错误日志到文件"""
+        try:
+            # 1. 提取和准备错误信息
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # 从错误消息中提取设备信息（如果未直接提供）
+            if not device_id or not ip:
+                extracted_id, extracted_ip = DataProcessingService.extract_device_info(message)
+                device_id = device_id or extracted_id
+                ip = ip or extracted_ip
+
+            # 2. 确定错误类型
+            error_type = self._determine_error_type(message, errors)
+
+            # 3. 构建错误详情
+            error_details = self._build_error_details(message, errors)
+
+            # 4. 创建格式化的错误信息
+            error_info = {
+                "时间": current_time,
+                "设备ID": device_id,
+                "IP地址": ip,
+                "错误类型": error_type,
+                "错误详情": error_details
+            }
+
+            # 写入错误日志
+            from service.file_service import FileService
+            FileService.write_error_log(error_info)
+
+        except Exception as e:
+            # 避免递归调用 log 和 write_to_error_log
+            print(f"写入错误日志失败: {str(e)}")
+
+    def _determine_error_type(self, message, errors):
+        """确定错误类型"""
+        if errors and isinstance(errors, list):
+            # 从结构化错误中获取类型
+            return next((err.get('type', '设备异常') for err in errors if isinstance(err, dict)), '设备异常')
+        
+        # 从消息文本判断错误类型
+        error_patterns = [
+            (r'时间[差异]|同步|时钟', '时间同步异常'),
+            (r'启动次数|重启', '启动次数异常'),
+            (r'离线|断开|连接失败', '设备离线'),
+            (r'超时|timeout', '通信超时'),
+            (r'认证|密码|登录', '认证失败')
+        ]
+        
+        for pattern, err_type in error_patterns:
+            if re.search(pattern, message, re.IGNORECASE):
+                return err_type
+                
+        return '设备异常'
+
+    def _optimize_error_message(self, message):
+        """优化错误消息显示，使其更友好"""
+        # 处理密码认证失败的错误消息
+        if "Access denied" in message and "password was not accepted" in message:
+            return "设备通信异常: 密码认证失败，请检查设备密码配置"
+        
+        # 处理其他常见的错误消息
+        error_patterns = [
+            (r'获取启动时间失败', '设备启动时间获取失败'),
+            (r'获取设备时间失败', '设备时间获取失败'),
+            (r'获取运行时长失败', '设备运行时长获取失败'),
+            (r'获取启动次数失败', '设备启动次数获取失败'),
+            (r'超时', '设备通信超时'),
+            (r'连接失败', '设备连接失败'),
+        ]
+        
+        for pattern, replacement in error_patterns:
+            if re.search(pattern, message, re.IGNORECASE):
+                return re.sub(pattern, replacement, message, flags=re.IGNORECASE)
+        
+        # 默认返回原消息
+        return message
+
+    def _build_error_details(self, message, errors):
+        """构建错误详情"""
+        if errors:
+            if isinstance(errors, list):
+                return errors
+            if isinstance(errors, dict):
+                return [errors]
+                
+        # 创建基本错误详情
+        return [{
+            'type': self._determine_error_type(message, None),
+            'process': '错误处理',
+            'difference': message
+        }]
+
+    def on_dev_type_changed(self, text):
+        """设备类型改变时的处理"""
+        self.dev_type = text
+        # 重新初始化日志文件
+        base_dir = get_base_dir(self.dev_type)
+        FileService.init_log_files(base_dir)
+        # 重新刷新设备列表
+        self.refresh_device_list()
+    
+    def start_monitor(self, delay_time, monitor_time, monitor_boot, monitor_start_count):
+        """开始监控"""
+        if self.monitor_thread and self.monitor_thread.isRunning():
+            self.log("监控已经在运行中")
+            return
+        
+        self.monitor_thread = MonitorThread(self.dev_type, delay_time, monitor_time, monitor_boot, monitor_start_count)
+        self.monitor_thread.update_signal.connect(self.log)
+        self.monitor_thread.device_list_signal.connect(self.on_device_list_updated)
+        self.monitor_thread.status_signal.connect(self.update_status_bar)
+        self.monitor_thread.error_signal.connect(self.handle_error)
+        self.monitor_thread.monitor_result_signal.connect(self.on_monitor_result)
+        self.monitor_thread.start()
+        
+        # 更新控制面板状态
+        self.control_panel.set_monitor_status(True)
+        
+        # 暂停自动刷新
+        self.auto_refresh_timer.stop()
+        
+        self.log(f"开始监控 {self.dev_type} 类型设备，查询间隔为 {delay_time} 秒")
+    
+    def stop_monitor(self):
+        """停止监控"""
+        try:
+            if self.monitor_thread:
+                if self.monitor_thread.isRunning():
+                    self.monitor_thread.stop()
+                self.monitor_thread = None
+                
+                # 更新控制面板状态
+                self.control_panel.set_monitor_status(False)
+                
+                # 恢复自动刷新
+                self.auto_refresh_timer.start()
+                
+                self.log("监控已停止")
+        except Exception as e:
+            self.log(f"停止监控时出错: {str(e)}", is_error=True)
+            # 无论如何都要确保按钮状态正确
+            self.control_panel.set_monitor_status(False)
+            self.monitor_thread = None
+    
+    def on_device_list_updated(self, devices):
+        """设备列表更新时的处理"""
+        # 检查设备数量是否有变化
+        if len(devices) != len(self.device_list_view.get_devices()) and self.monitor_thread and self.monitor_thread.isRunning():
+            difference_count = abs(len(devices) - len(self.device_list_view.get_devices()))
+            if len(devices) < len(self.device_list_view.get_devices()):
+                # 使用警告级别而不是错误级别
+                self.log(f"警告: 设备离线，设备数量从 {len(self.device_list_view.get_devices())} 台减少到 {len(devices)} 台", is_warning=True)
+                
+                # 更新刷新状态标签
+                self.control_panel.update_refresh_status(
+                    f"当前设备数: {len(devices)} (减少{difference_count}台)",
+                    is_error=True
+                )
+                
+                # 写入错误日志
+                offline_devices = []
+                current_device_ids = {device_info['id'] for device_info in self.device_list_view.get_devices()}
+                # 检查devices的格式并相应处理
+                if devices and isinstance(devices[0], dict):
+                    new_device_ids = {device_info['id'] for device_info in devices}
+                else:
+                    new_device_ids = {device_id for device_id, _ in devices}
+                for device_id in current_device_ids:
+                    if device_id not in new_device_ids:
+                        offline_devices.append(device_id)
+                if offline_devices:
+                    # 单独记录每个离线设备的错误日志
+                    for device_id in offline_devices:
+                        # 查找设备的IP和密码信息
+                        device_info = next((d for d in self.device_list_view.get_devices() if d['id'] == device_id), None)
+                        ip = device_info.get('ip', 'N/A') if device_info else 'N/A'
+                        password = device_info.get('password', 'N/A') if device_info else 'N/A'
+                        
+                        # 优化错误格式，使其与file_service.py中的格式匹配
+                        errors = [{
+                            'type': '设备离线',
+                            'process': f'设备ID: {device_id}, IP: {ip}',
+                            'difference': '设备从监控列表中消失'
+                        }]
+                        # 构建正确的错误信息字典格式
+                        error_info = {
+                            "时间": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            "设备ID": device_id,
+                            "IP地址": ip,
+                            "错误类型": "设备离线",
+                            "错误详情": errors
+                        }
+                        FileService.write_error_log(error_info)
+            else:
+                self.log(f"设备数量增加，从 {len(self.device_list_view.get_devices())} 台增加到 {len(devices)} 台")
+                
+                # 更新刷新状态标签
+                self.control_panel.update_refresh_status(
+                    f"当前设备数: {len(devices)} (增加{difference_count}台)"
+                )
+                
+        # 保持已选设备的选择状态
+        current_selected = self.device_list_view.get_selected_devices().copy()
+        
+        # 更新设备列表
+        self.device_list_view.update_device_table(devices)
+        
+        # 恢复选择状态
+        try:
+            # 尝试新格式（字典列表）
+            new_selected = set()
+            for device_info in devices:
+                if isinstance(device_info, dict) and 'id' in device_info:
+                    if device_info['id'] in current_selected:
+                        new_selected.add(device_info['id'])
+                else:
+                    # 尝试旧格式（元组列表）
+                    device_id = device_info[0]
+                    if device_id in current_selected:
+                        new_selected.add(device_id)
+            self.device_list_view.set_selected_devices(new_selected)
+        except Exception:
+            # 出现异常时尝试旧格式处理
+            new_selected = set()
+            for device_id, _ in devices:
+                if device_id in current_selected:
+                    new_selected.add(device_id)
+            self.device_list_view.set_selected_devices(new_selected)
+
+    def update_device_list(self, devices):
+        """更新设备列表"""
+        # 保持已选设备的选择状态
+        current_selected = self.device_list_view.get_selected_devices().copy()
+        
+        # 更新设备列表
+        self.device_list_view.update_device_table(devices)
+        
+        # 恢复选择状态
+        try:
+            # 尝试新格式（字典列表）
+            new_selected = set()
+            for device_info in devices:
+                if isinstance(device_info, dict) and 'id' in device_info:
+                    if device_info['id'] in current_selected:
+                        new_selected.add(device_info['id'])
+                else:
+                    # 尝试旧格式（元组列表）
+                    device_id = device_info[0]
+                    if device_id in current_selected:
+                        new_selected.add(device_id)
+            self.device_list_view.set_selected_devices(new_selected)
+        except Exception:
+            # 出现异常时尝试旧格式处理
+            new_selected = set()
+            for device_id, _ in devices:
+                if device_id in current_selected:
+                    new_selected.add(device_id)
+            self.device_list_view.set_selected_devices(new_selected)
+    
+    def query_selected(self, query_type):
+        """查询选中的设备"""
+        selected_devices = self.device_list_view.get_selected_devices()
+        if not selected_devices:
+            self.log("请先选择要查询的设备")
+            return
+        
+        # 停止所有正在运行的查询线程
+        for thread in self.query_threads:
+            if thread.isRunning():
+                thread.quit()
+                thread.wait()
+        self.query_threads.clear()
+        
+        # 开始新的查询
+        query_count = 0
+        for device_info in self.device_list_view.get_devices():
+            device_id = device_info['id']
+            ip = device_info['ip']
+            password = device_info.get('password', '')
+            
+            if device_id in selected_devices:
+                query_count += 1
+                # 创建查询线程
+                thread = QueryThread(device_id, ip, password, query_type)
+                thread.result_signal.connect(self.on_query_result)
+                thread.error_signal.connect(lambda msg: self.log(msg, is_error=True))
+                self.query_threads.append(thread)
+                thread.start()
+        
+        self.log(f"开始查询 {query_count} 台设备的{self.get_query_type_text(query_type)}信息")
+    
+    def get_query_type_text(self, query_type):
+        """获取查询类型的文本描述"""
+        if query_type == "all":
+            return "全部"
+        elif query_type == "time":
+            return "设备时间"
+        elif query_type == "boot_time":
+            return "启动时间"
+        elif query_type == "start_count":
+            return "播放器启动次数"
+        return "未知"
+    
+    def on_query_result(self, device_id, results):
+        """处理查询结果"""
+        self.log(f"\n设备 {device_id} 查询结果:")
+        
+        if 'device_time' in results:
+            time_info = results['device_time']
+            from datetime import datetime, timedelta
+            # 将UTC时间转换为本地时间（UTC+8）
+            if time_info['formatted_remote_time'] != 'N/A':
+                utc_time = datetime.strptime(time_info['formatted_remote_time'], '%Y-%m-%d %H:%M:%S')
+                local_time = utc_time + timedelta(hours=8)
+                self.log(f"设备时间: {local_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                self.log("设备时间: N/A")
+            time_diff = int(time_info['time_diff']) if time_info['time_diff'] != 'N/A' else 0
+            self.log(f"时间差: {time_diff} 秒")
+            # 时间差小于120秒属于正常，否则记录警告
+            if time_diff != 'N/A' and time_diff > 120:
+                self.log(f"警告: 设备时间与系统时间偏差超过120秒", is_warning=True)
+        
+        if 'boot_time' in results:
+            boot_info = results['boot_time']
+            if 'error' not in boot_info:
+                self.log(f"运行时长: {boot_info.get('formatted_uptime', 'N/A')}")
+                self.log(f"启动时间: {self.format_time_to_minute(boot_info.get('boot_time', 'N/A'))}")
+            else:
+                self.log(f"获取启动时间失败: {boot_info['error']}", is_error=True)
+
+        
+        if 'start_count' in results:
+            self.log(f"播放器启动次数: {results['start_count']}")
+            # 启动次数为1属于正常，否则记录警告
+            if results['start_count'] != '无法获取':
+                try:
+                    start_count = int(results['start_count'])
+                    if start_count > 1:
+                        self.log(f"警告: 播放器启动次数异常，当前值为 {start_count}", is_warning=True)
+                except (ValueError, TypeError):
+                    # 如果无法转换为整数，说明是错误信息，不进行异常判断
+                    pass
+                
+    def on_monitor_result(self, device_data):
+        """处理监控结果并自动导出到Excel"""
+        try:
+            self.export_monitor_results_to_excel(device_data)
+        except Exception as e:
+            self.log(f"自动导出Excel失败: {str(e)}", is_error=True)
+    
+    def export_monitor_results_to_excel(self, device_data):
+        """导出监控结果到Excel文件"""
+        try:
+            import pandas as pd
+        except ImportError:
+            self.log("导出Excel失败：未找到pandas模块。请运行 'pip install pandas' 安装依赖", is_error=True)
+            return
+        
+        import os
+        from datetime import datetime
+        
+        # 初始化Excel文件名，只在第一次创建时生成
+        if not self.excel_file:
+            # 生成文件名，格式：[dev_type]_[yy-mm-dd_HH-MM-SS].xlsx
+            current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            self.excel_file = f'{self.dev_type}_{current_time}.xlsx'
+        
+        # 创建数据列表
+        data = []
+        
+        # 确定要导出的字段
+        fields = {
+            '系统时间': 'system_time',
+            '设备ID': 'id',
+            'IP地址': 'ip',
+            'MAC地址': 'mac_address',
+            '设备名称': 'device_name'
+        }
+        
+        # 根据监控选项动态添加字段
+        if self.control_panel.monitor_time_check.isChecked():
+            fields['设备时间'] = 'initial_card_time'
+            fields['时间差'] = 'initial_time_diff'
+        if self.control_panel.monitor_boot_check.isChecked():
+            fields['启动时间'] = 'last_boot_time'
+            fields['运行时长'] = 'last_uptime'
+        if self.control_panel.monitor_start_count_check.isChecked():
+            fields['播放器启动次数'] = 'last_start_count'
+        
+        # 获取当前系统时间
+        current_system_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        for device_id, info in device_data.items():
+            # 准备一行数据
+            row = {}
+            
+            # 填充固定字段
+            row['系统时间'] = current_system_time
+            row['设备ID'] = device_id
+            
+            # 找到对应的设备信息
+            device_info = next((d for d in self.device_list_view.get_devices() if d['id'] == device_id), None)
+            if device_info:
+                row['IP地址'] = device_info.get('ip', '未知')
+                row['MAC地址'] = device_info.get('mac_address', '未知')
+                row['设备名称'] = device_info.get('device_name', '未知')
+            else:
+                row['IP地址'] = '未知'
+                row['MAC地址'] = '未知'
+                row['设备名称'] = '未知'
+            
+            # 填充动态字段
+            if self.control_panel.monitor_time_check.isChecked():
+                row['设备时间'] = info.get('last_card_time', info.get('initial_card_time', 'N/A'))
+                time_diff = info.get('last_time_diff', info.get('initial_time_diff', 'N/A'))
+                row['时间差'] = f"{time_diff}秒" if time_diff != 'N/A' else time_diff
+            
+            if self.control_panel.monitor_boot_check.isChecked():
+                # 格式化启动时间到分钟
+                boot_time = info.get('last_boot_time', 'N/A')
+                row['启动时间'] = self.format_time_to_minute(boot_time)
+                row['运行时长'] = info.get('last_uptime', 'N/A')
+            
+            if self.control_panel.monitor_start_count_check.isChecked():
+                row['播放器启动次数'] = info.get('last_start_count', 'N/A')
+            
+            data.append(row)
+        
+        # 创建DataFrame
+        df = pd.DataFrame(data)
+        
+        # 写入Excel文件
+        try:
+            # 检查文件是否存在，决定是否需要写入表头
+            file_exists = os.path.exists(self.excel_file)
+            
+            # 检查是否有xlsxwriter库
+            try:
+                import xlsxwriter
+                # 使用xlsxwriter引擎
+                engine = 'xlsxwriter'
+            except ImportError:
+                # 如果没有xlsxwriter，使用默认引擎
+                engine = None
+                
+            # 写入数据到Excel文件
+            if file_exists:
+                # 文件已存在，追加数据而不写入表头
+                # 读取现有数据
+                existing_df = pd.read_excel(self.excel_file)
+                # 合并数据
+                merged_df = pd.concat([existing_df, df])
+                # 使用xlsxwriter引擎保存并调整列宽
+                if engine == 'xlsxwriter':
+                    with pd.ExcelWriter(self.excel_file, engine=engine) as writer:
+                        # 写入合并后的数据
+                        merged_df.to_excel(writer, index=False, sheet_name='设备监控数据')
+                        # 获取工作表
+                        worksheet = writer.sheets['设备监控数据']
+                        
+                        # 模拟autofit功能：计算每列的最大宽度并设置
+                        for col_num, col_name in enumerate(merged_df.columns):
+                            # 获取当前列所有非空数据的文本长度
+                            col_values = merged_df[col_name].dropna().astype(str)
+                            # 找出最大文本长度，包含列名长度
+                            max_length = max([len(str(x)) for x in col_values] + [len(col_name)]) + 15  # 加2作为边距
+                            # 设置列宽，最大不超过50
+                            worksheet.set_column(col_num, col_num, min(max_length, 50))
+                else:
+                    # 没有xlsxwriter时直接保存
+                    merged_df.to_excel(self.excel_file, index=False, sheet_name='设备监控数据')
+            else:
+                # 文件不存在，创建新文件并写入表头
+                with pd.ExcelWriter(self.excel_file, engine=engine) as writer:
+                    # 写入数据
+                    df.to_excel(writer, index=False, sheet_name='设备监控数据')
+                    
+                    # 如果使用xlsxwriter引擎，设置列宽
+                    if engine == 'xlsxwriter':
+                        # 获取工作表
+                        worksheet = writer.sheets['设备监控数据']
+                        
+                        # 模拟autofit功能：计算每列的最大宽度并设置
+                        for col_num, col_name in enumerate(df.columns):
+                            # 获取当前列所有非空数据的文本长度
+                            col_values = df[col_name].dropna().astype(str)
+                            # 找出最大文本长度，包含列名长度
+                            max_length = max([len(str(x)) for x in col_values] + [len(col_name)]) + 15  # 加2作为边距
+                            # 设置列宽，最大不超过50
+                            worksheet.set_column(col_num, col_num, min(max_length, 50))
+        except Exception as e:
+            self.log(f"写入Excel文件时出错: {str(e)}", is_error=True)
+            return
+        
+        # 记录导出日志
+        self.log(f"监控结果已成功导出到 {os.path.abspath(self.excel_file)}")
+    
+    def log(self, message, is_error=False, is_warning=False):
+        """记录日志，支持错误(红色)、警告(黄色)和正常(黑色)消息"""
+        self.result_display_view.log(message, is_error, is_warning)
+        
+    def open_error_log_in_notepad(self):
+        """打开记事本显示错误日志，并处理进程冲突"""
+        import subprocess
+        import os
+        from config import error_log_file
+        
+        # 确保错误日志文件存在
+        if not os.path.exists(error_log_file):
+            with open(error_log_file, 'w') as f:
+                f.write("# 错误日志文件\n")
+        
+        # 如果已经有记事本打开，先关闭它
+        if self.notepad_process:
+            try:
+                self.notepad_process.terminate()
+                self.notepad_process.wait(timeout=3)
+            except:
+                pass  # 如果关闭失败，继续执行下一步
+        
+        # 打开新的记事本
+        self.notepad_process = subprocess.Popen(['notepad.exe', error_log_file])
+    
+    def format_time_to_minute(self, time_str):
+        """将时间字符串格式化为精确到分钟"""
+        if time_str == 'N/A' or not time_str:
+            return time_str
+        try:
+            # 尝试不同的时间格式解析
+            if 'T' in time_str:  # ISO格式
+                dt = datetime.fromisoformat(time_str)
+            else:
+                # 尝试其他常见格式
+                formats = ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%dT%H:%M:%S.%f']
+                for fmt in formats:
+                    try:
+                        dt = datetime.strptime(time_str, fmt)
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    return time_str
+            # 返回精确到分钟的格式
+            return dt.strftime('%Y-%m-%d %H:%M')
+        except Exception:
+            return time_str
+            
+    def on_device_selected(self, selected_devices):
+        """设备选择变化时的处理"""
+        # 这里可以添加设备选择变化时的额外处理逻辑
+        pass
+        
+    def on_clear_log(self):
+        """清空日志时的处理"""
+        # 这里可以添加清空日志时的额外处理逻辑
+        pass
+        
+    def closeEvent(self, event):
+        """窗口关闭时的处理"""
+        self.stop_monitor()
+        self.auto_refresh_timer.stop()  # 停止自动刷新定时器
+        for thread in self.query_threads:
+            if thread.isRunning():
+                thread.quit()
+                thread.wait()
+        event.accept()
+    
+    def refresh_device_list(self):
+        """刷新设备列表"""
+        from service.tool_service import ToolService
+        try:
+            # 获取当前设备类型
+            dev_type = self.control_panel.dev_type
+            
+            # 使用ToolService获取设备列表
+            devices = ToolService.get_device_list(dev_type)
+            
+            # 更新设备列表
+            self.update_device_list(devices)
+            
+            # 更新刷新状态标签
+            self.control_panel.update_refresh_status(f"当前设备数: {len(devices)}")
+            
+            self.log(f"设备列表已刷新，共 {len(devices)} 台设备")
+        except Exception as e:
+            self.log(f"刷新设备列表失败: {str(e)}", is_error=True)
+
+    def monitor_device(self, device):
+        """监控单个设备"""
+        try:
+            # 获取设备时间
+            device_time = self.get_device_time(device)
+            # 获取当前时间
+            current_time = datetime.now()
+            # 计算时间差
+            time_diff = (current_time - device_time).total_seconds()
+            # 写入Excel（确保每次都写最新的时间和时间差）
+            self.write_to_excel(device, device_time, time_diff)
+        except Exception as e:
+            # 写入异常到 device_error.txt
+            with open('device_error.txt', 'a', encoding='utf-8') as f:
+                f.write(f"{datetime.now()} 设备:{device} 获取时间异常: {str(e)}\n")
+
+    def write_to_excel(self, device, device_time, time_diff):
+        """写入设备时间和时间差到Excel"""
+        # 优化：每次写入最新数据
+        import pandas as pd
+        import os
+        row = {
+            '设备': device,
+            '设备时间': device_time,
+            '时间差': time_diff,
+            '系统时间': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        file = 'device_time.xlsx'
+        df = pd.DataFrame([row])
+        if os.path.exists(file):
+            old = pd.read_excel(file)
+            df = pd.concat([old, df], ignore_index=True)
+        df.to_excel(file, index=False)
