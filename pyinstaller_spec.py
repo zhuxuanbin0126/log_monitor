@@ -12,6 +12,10 @@ data_files = [
     ('plink.exe', '.', 'DATA'),
     ('config.py', '.', 'DATA'),
     ('requirements.txt', '.', 'DATA'),
+    ('adb.exe', '.', 'DATA'),
+    ('AdbWinApi.dll', '.', 'DATA'),
+    ('pscp.exe', '.', 'DATA'),
+    ('AdbWinUsbApi.dll', '.', 'DATA')
 ]
 
 # 需要包含的隐藏导入（PyQt5相关）

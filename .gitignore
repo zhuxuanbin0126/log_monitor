@@ -3,3 +3,6 @@ service/__pycache__
 __pycache__
 business/__pycache__
 *.xlsx
+build
+dist
+*.spec

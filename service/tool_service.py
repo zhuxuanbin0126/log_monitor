@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timedelta
 import re
 import json
+from config import supported_dev_types
 
 class ToolService:
     """工具服务类，负责与外部工具交互"""
@@ -38,6 +39,9 @@ class ToolService:
         # 过滤符合模式的设备
         devices = []
         for line in stdout.split('\n'):
+            if line.split("-")[0] not in supported_dev_types:
+                continue
+
             if re.match(f"^({pattern})", line):
                 parts = line.strip().split()
                 if len(parts) >= 2:
@@ -47,6 +51,7 @@ class ToolService:
                     # 初始设置为未知
                     mac_address = "未知"
                     device_name = "未知"
+                    system_type = "未知"
                     
                     # 尝试获取MAC地址和设备名称
                     try:
@@ -61,8 +66,12 @@ class ToolService:
                         
                         # 检查设备ID前缀是否为C08L、C16L或D16
                         if device_id.startswith('C08L') or device_id.startswith('C16L') or device_id.startswith('D16'):
-                            # 这三种设备类型不支持获取设备名称
-                            device_name = "无法获取"
+                            device_name_cmd = 'cat /root/Box/config/dev_info.xml'
+                            name_stdout, name_stderr, _ = ToolService.ssh_execute_command(ip, password, device_name_cmd, '.')
+                            if name_stdout and not name_stderr:
+                                name_match = re.search(r'<name len=".*?">(.*?)</name>', name_stdout)
+                                if name_match:
+                                    device_name = name_match.group(1)
                         else:
                             # 获取设备名称
                             device_name_cmd = 'cat /data/data/cn.huidu.lcd.player/files/config/DeviceInfoConfig.xml'
@@ -71,6 +80,17 @@ class ToolService:
                                 name_match = re.search(r'<item name="DeviceName">(.*?)</item>', name_stdout)
                                 if name_match:
                                     device_name = name_match.group(1)
+
+                        system_type_cmd = "getprop ro.build.version.release"
+                        system_stdout, system_Error, _= ToolService.ssh_execute_command(ip, password, system_type_cmd, '.')
+                        if len(system_stdout) != 0:
+                            system_type = f"Android{system_stdout}"
+
+                        else:
+                            system_type_cmd = "cat /proc/version"
+                            system_stdout, system_Error, _= ToolService.ssh_execute_command(ip, password, system_type_cmd, '.')
+                            system_type = f"{system_stdout.split(' ')[0]}"
+
                     except Exception as e:
                         print(f"获取设备 {device_id} 详细信息时出错: {str(e)}")
                     
@@ -80,7 +100,8 @@ class ToolService:
                         'ip': ip,
                         'password': password,
                         'mac_address': mac_address,
-                        'device_name': device_name
+                        'device_name': device_name,
+                        "system_type": system_type
                     })
         
         return devices
@@ -122,7 +143,7 @@ class ToolService:
         os.makedirs(base_dir, exist_ok=True)
         
         # 创建临时脚本文件
-        script_filename = f'{base_dir}/temp_script.txt'
+        script_filename = f'{base_dir}/{ip}temp_script.txt'
         with open(script_filename, 'w') as f:
             f.write(command_script)
             f.write('\nexit\n')
@@ -130,7 +151,6 @@ class ToolService:
         # 执行远程命令
         cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {script_filename}'
         stdout, stderr, returncode = ToolService.run_command(cmd)
-        
         # 清理临时文件
         if os.path.exists(script_filename):
             os.remove(script_filename)
@@ -151,20 +171,43 @@ class ToolService:
         """
         使用adb将文件推送到远程设备
         """
-        cmd = f'adb -s {ip} connect {ip}:5555'
-        stdout, stderr, returncode = ToolService.run_command(cmd)
-        if not stderr:
-            cmd = f"adb -s {ip} root & adb -s {ip} remount"
+        try:
+            cmd = f'adb -s {ip} connect {ip}:5555'
             stdout, stderr, returncode = ToolService.run_command(cmd)
-            if not  stderr:
-                cmd = f'adb -s {ip} push {local_file} {remote_file}'
+            if not stderr:
+                cmd = f"adb -s {ip} root & adb -s {ip} remount"
+                stdout, stderr, returncode = ToolService.run_command(cmd)
+                if not  stderr:
+                    cmd = f'adb -s {ip} push {local_file} {remote_file}'
+                    stdout, stderr, returncode = ToolService.run_command(cmd)
+                    if not stderr:
+                        return stdout
+                else:
+                    cmd="adb disconnect"
+                    ToolService.run_command(cmd)
+        except Exception as e:
+            print(f"Error: {str(e)}")
+        return stderr
+
+    @staticmethod
+    def adb_pull_file(ip, password, local_file, remote_file):
+        """
+        使用adb将文件推送到远程设备
+        """
+        try:
+            cmd = f'adb -s {ip} connect {ip}:5555'
+            stdout, stderr, returncode = ToolService.run_command(cmd)
+            if not stderr:
+                cmd = f"adb -s {ip} root & adb -s {ip} remount"
                 stdout, stderr, returncode = ToolService.run_command(cmd)
                 if not stderr:
-                    return stdout
-            else:
-                cmd="adb disconnect"
-                ToolService.run_command(cmd)
-        return stderr
+                    cmd = f'adb -s {ip} pull {local_file} {remote_file}'
+                    stdout, stderr, returncode = ToolService.run_command(cmd)
+                    if not stderr:
+                        return stdout
+        except Exception as e:
+            return f"Error: {str(e)}"
+        return stdout
 
     @staticmethod
     def pscp_push_file(ip, password, local_file, remote_file):
@@ -172,6 +215,18 @@ class ToolService:
         使用pscp将文件推送到远程设备
         """
         cmd = f'pscp -pw "{password}" {local_file} root@{ip}:{remote_file}'
+        stdout, stderr, returncode = ToolService.run_command(cmd)
+        if not stderr:
+            return stdout
+        else:
+            return stderr
+
+    @staticmethod
+    def pscp_pull_file(ip, password, remote_file, local_file):
+        """
+        使用pscp将文件推送到远程设备
+        """
+        cmd = f'pscp -pw "{password}" root@{ip}:{remote_file} {local_file}'
         stdout, stderr, returncode = ToolService.run_command(cmd)
         if not stderr:
             return stdout

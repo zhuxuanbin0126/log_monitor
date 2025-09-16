@@ -3,13 +3,14 @@
 
 from setuptools import setup, find_packages
 import os
+from config import VERSION
 
 # 获取当前目录下的所有文件
 def get_data_files():
     data_files = []
     
     # 添加可执行文件
-    exe_files = ['DeviceId.exe', 'bash.exe', 'grep.exe', 'plink.exe']
+    exe_files = ['DeviceId.exe', 'bash.exe', 'grep.exe', 'plink.exe','adb.exe', 'pscp.exe', 'AdbWinUsbApi.dll', 'AdbWinApi.dll']
     for exe_file in exe_files:
         if os.path.exists(exe_file):
             data_files.append(exe_file)
@@ -31,7 +32,7 @@ def get_data_files():
 
 setup(
     name="log_monitor",
-    version="1.0.0",
+    version=VERSION,
     description="设备监控和日志记录工具",
     author="Your Name",
     author_email="your.email@example.com",

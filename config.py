@@ -8,8 +8,12 @@ import os
 VERSION = '1.0.0.1'
 
 # 设备类型配置
-supported_dev_types = ['A-B-C-D-H','A3L', 'A4L', 'A5L', 'A6L', 'A7', 'A8', 'B6L', 'B8L', 'C08L', 'C16H', 'H4K', 'H6', 'H8']
+supported_dev_types = ['A-B-C-D-H','A3L', 'A4L', 'A5L', 'A6L', 'A7', 'A8', 'B6L', 'B8L', 'C08L', 'C16H', 'H4K', 'H6', 'H8', "D16", "C16L"]
 """支持的设备类型列表"""
+
+tool_path = "./tools" #工具路径
+
+program_path = "./program" #节目保存位置
 
 default_dev_type = 'A-B-C-D-H'  # 默认设备类型
 

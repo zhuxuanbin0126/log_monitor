@@ -42,9 +42,10 @@ class DeviceListView(QWidget):
         
     def create_device_table(self, parent_layout):
         """创建设备表格"""
+        col_list = ["选择", "设备ID", "IP地址", "MAC地址", "设备密码", "设备名称", "系统类型"]
         self.device_table = QTableWidget()
-        self.device_table.setColumnCount(6)
-        self.device_table.setHorizontalHeaderLabels(["选择", "设备ID", "IP地址", "MAC地址", "设备密码", "设备名称"])
+        self.device_table.setColumnCount(len(col_list))
+        self.device_table.setHorizontalHeaderLabels(col_list)
         
         # 设置表格样式：支持选中复制
         self.device_table.setSelectionBehavior(QTableWidget.SelectItems)  # 允许选择单个单元格
@@ -117,6 +118,11 @@ class DeviceListView(QWidget):
             name_item = QTableWidgetItem(device_info['device_name'])
             name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.device_table.setItem(row, 5, name_item)
+
+            # 系统类型
+            system_type_item = QTableWidgetItem(device_info['system_type'])
+            system_type_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.device_table.setItem(row, 6, system_type_item)
         
         # 保留手动设置的列宽，不自动调整
         # 确保选项列保持较小宽度

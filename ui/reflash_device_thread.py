@@ -6,10 +6,11 @@ class ReflashThread(QThread):
     error_signal = pyqtSignal(str)
     success_signal = pyqtSignal(str)
 
-    def __init__(self,control_panel,update_device_list):
+    def __init__(self,control_panel,update_device_list,log):
         super().__init__()
         self.control_panel = control_panel
         self.update_device_list = update_device_list
+        self.log = log
     def run(self):
         """刷新设备列表"""
         from service.tool_service import ToolService
@@ -29,3 +30,4 @@ class ReflashThread(QThread):
             self.success_signal.emit(f"设备列表已刷新，共 {len(devices)} 台设备")
         except Exception as e:
             self.error_signal.emit(f"刷新设备列表失败: {str(e)}")
+        self.control_panel.refresh_button.setEnabled(True)

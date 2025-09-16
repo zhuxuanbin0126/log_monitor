@@ -1,4 +1,6 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTextEdit, QMenu, QAction
+import os
+import time
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTextEdit, QMenu, QAction, QPushButton, QHBoxLayout, QMessageBox
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 from datetime import datetime
@@ -14,19 +16,34 @@ class ResultDisplayView(QWidget):
         
     def init_ui(self):
         """初始化UI"""
+
         self.result_display_group = QGroupBox("结果显示")
         result_display_layout = QVBoxLayout(self.result_display_group)
-        
+
+        self.msg = None
+
         # 创建日志显示框
-        self.create_log_display(result_display_layout)
+        self.create_log_display(result_display_layout,self.result_display_group)
         
         # 设置主布局
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(self.result_display_group)
         main_layout.setContentsMargins(0, 0, 0, 0)
         
-    def create_log_display(self, parent_layout):
+    def create_log_display(self, parent_layout, result_display_group):
         """创建日志显示区域"""
+
+        result_layout = QHBoxLayout()
+        result_layout.setAlignment(Qt.AlignLeft)
+
+        self.result_display_clear_button = QPushButton("清除日志")
+        self.result_display_clear_button.setFixedSize(80,25)
+        self.result_display_clear_button.clicked.connect(self.clear_log)
+
+        self.result_display_outlog_button = QPushButton("导出结果日志")
+        self.result_display_outlog_button.setFixedSize(80,25)
+        self.result_display_outlog_button.clicked.connect(self.output_log_text)
+
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setLineWrapMode(QTextEdit.WidgetWidth)
@@ -35,6 +52,9 @@ class ResultDisplayView(QWidget):
         self.log_text.setContextMenuPolicy(Qt.CustomContextMenu)
         self.log_text.customContextMenuRequested.connect(self.show_log_context_menu)
         
+        result_layout.addWidget(self.result_display_clear_button)
+        result_layout.addWidget(self.result_display_outlog_button)
+        parent_layout.addLayout(result_layout)
         parent_layout.addWidget(self.log_text)
         
     def show_log_context_menu(self, position):
@@ -81,7 +101,17 @@ class ResultDisplayView(QWidget):
         """清空日志显示"""
         self.log_text.clear()
         self.clear_log_clicked.emit()
-        
+
+    def output_log_text(self):
+        """输出日志"""
+        log_out_time = time.strftime("%Y%m%d_%H%M%S",time.localtime())
+        if not os.path.exists("./result_log"):
+            os.mkdir("./result_log")
+        path = f"./result_log/result_{log_out_time}.log"
+        open( path, "a", encoding="utf-8").write(self.log_text.toPlainText())
+        QMessageBox.information(None, '提示', f'日志导出成功\n导出位置：{path}',QMessageBox.Ok)
+        self.log(f"日志导出成功,导出位置：{path}")
+
     def log(self, message, is_error=False, is_warning=False):
         """显示日志，支持错误(红色)、警告(黄色)、正常(黑色)"""
         from PyQt5.QtGui import QColor

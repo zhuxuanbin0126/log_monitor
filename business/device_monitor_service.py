@@ -9,6 +9,7 @@ from service.data_processing_service import DataProcessingService
 from service.file_service import FileService
 from config import get_base_dir, time_diff_threshold, daily_time_diff_threshold
 import os
+from config import tool_path, program_path
 
 class DeviceMonitorService:
     """设备监控业务服务类，负责设备监控的核心业务逻辑"""
@@ -20,32 +21,131 @@ class DeviceMonitorService:
         os.makedirs(self.base_dir, exist_ok=True)
         self.device_data = FileService.load_device_data()
         self.notepad_process = None  # 用于跟踪记事本进程
-    def count_init_setting(self,ip, password, device_id):
+    def count_init_setting(self, ip, password, device_id, system_type):
         """
         设备初始化设置开关机
         """
         try:
+            resault_log = self.ntptime_checkout_time(ip, password, device_id, system_type)
+            if "失败" in resault_log:
+                Exception(resault_log)
+        except Exception as e:
+            return f"{device_id} 设备校时失败 - {str(e)},请检查网络是否正常连接外网"
+
+        try:
             ToolService.initialize_connection(ip, password)
             if device_id.split('-')[0] == "C16H":
+                ToolService.adb_push_file(ip, password, f"{tool_path}/boot_counter.sh", "/system/bin/")
                 ToolService.ssh_execute_command(ip, password, "touch /data/swich_counter_flag", ".")
             elif device_id.split('-')[0] in [ "C16L", "C08L", "D16", "D36" ]:
-                ToolService.pscp_push_file(ip, password, "boot_counter/boot_counter.sh", "/root")
-                ToolService.pscp_push_file(ip, password, "boot_counter/run.sh", "/root/Box")
+                ToolService.pscp_push_file(ip, password, f"{tool_path}/boot_counter.sh", "/root")
+                ToolService.pscp_push_file(ip, password, f"{tool_path}/run.sh", "/root/Box")
                 ToolService.ssh_execute_command(ip, password, "touch /root/Box/project/swich_counter_flag", ".")
                 ToolService.ssh_execute_command(ip, password, "chmod +x /root/boot_counter.sh & chmod +x /root/Box/run.sh", ".")
             elif device_id.split('-')[0] in [ "A4L", "A5L", "A6L", "B6L" ]:
-                ToolService.adb_push_file(ip, password, "boot_counter/boot_counter.sh", "/system/bin/")
-                ToolService.adb_push_file(ip, password, "boot_counter/init.huidu.rc", "/vendor/etc/init/hw")
+                ToolService.adb_push_file(ip, password, f"{tool_path}/boot_counter.sh", "/system/bin/")
+                ToolService.adb_push_file(ip, password, f"{tool_path}/init.huidu.rc", "/vendor/etc/init/hw")
                 ToolService.ssh_execute_command(ip, password, "touch /data/swich_counter_flag", ".")
             elif device_id.split('-')[0] in [ "H4K", "H6", "H8", "B8L" ]:
-                ToolService.adb_push_file(ip, password, "boot_counter/boot_counter.sh", "/system/bin/")
-                ToolService.adb_push_file(ip, password, "boot_counter/init.rk356x.rc", "/vendor/etc/init/hw")
+                ToolService.adb_push_file(ip, password, f"{tool_path}/boot_counter.sh", "/system/bin/")
+                ToolService.adb_push_file(ip, password, f"{tool_path}/init.rk356x.rc", "/vendor/etc/init/hw")
                 ToolService.ssh_execute_command(ip, password, "touch /data/swich_counter_flag", ".")
 
             return f"{device_id} 设置开关机成功"
         except Exception as e:
             return f"{device_id} 设置开关机失败 - {str(e)}"
 
+    def sum_switch_count(self, ip, password, device_id, path):
+        """
+        设备累计开机次数
+        """
+        try:
+            cmd = f"wc -l {path}/swich_counter.csv"
+            stdout, stderr, returncode = ToolService.ssh_execute_command(ip,password, cmd, ".")
+            stdout = stdout.strip()
+            switch_time = int(stdout.split(' ')[0])-1
+
+            cmd = f"wc -l {path}/network_counter.csv"
+            stdout, stderr, returncode = ToolService.ssh_execute_command(ip,password, cmd, ".")
+            stdout = stdout.strip()
+            network_time = int(stdout.split(' ')[0])-1
+
+        except Exception as e:
+            return f"{device_id} 获取累计开机次数失败 - {str(e)}"
+        return switch_time, network_time
+
+    def switch_log_output(self, ip, password, device_id, system_type, path):
+        try:
+            if not os.path.exists("./switch_log"):
+                os.mkdir("./switch_log")
+            if not os.path.exists(f"./switch_log/{device_id}"):
+                os.mkdir(f"./switch_log/{device_id}")
+            if "Android" in system_type:
+                time.sleep(1)
+                stdout = ToolService.adb_pull_file(ip, password, f"{path}/network_counter.csv", f"./switch_log/{device_id}/network_counter.csv")
+                time.sleep(1)
+                stdout = ToolService.adb_pull_file(ip, password, f"{path}/swich_counter.csv", f"./switch_log/{device_id}/swich_counter.csv")
+                cmd="adb disconnect"
+                ToolService.run_command(cmd)
+            elif "Linux" in system_type:
+                stdout = ToolService.pscp_pull_file(ip, password, f"{path}/network_counter.csv", f"./switch_log/{device_id}/network_counter.csv")
+                stdout = ToolService.pscp_pull_file(ip, password, f"{path}/swich_counter.csv", f"./switch_log/{device_id}/swich_counter.csv")
+            return f"{device_id} 日志已保存至：./switch_log/{device_id}"
+        except Exception as e:
+            return f"{device_id} 获取日志失败 - {str(e)}"
+
+    def ntptime_checkout_time(self, ip, password, device_id, system_type):
+        """
+        设置设备时间
+        """
+        try:
+            remote_file = ""
+            if "Android" in system_type:
+                remote_file = "/system/bin/ntpdate"
+                stdout = ToolService.adb_pull_file(ip, password, f"{tool_path}/ntpdate", remote_file)
+            elif "Linux" in system_type:
+                remote_file = "/bin/ntpdate"
+                stdout = ToolService.pscp_push_file(ip, password, f"{tool_path}/ntpdate", remote_file)
+            else:
+                return "不支持该系统类型"
+            stdout = ToolService.ssh_execute_command(ip, password, f"chmod +x {remote_file} & ntpdate -server ntp.huidu.cn", ".")
+            stdout = ToolService.ssh_execute_command(ip, password, "hwclock -w", ".")
+            stdout = ToolService.ssh_execute_command(ip, password, f"rm {remote_file}", ".")
+            stdout, _, _ = ToolService.ssh_execute_command(ip, password, "date", ".")
+            return f"{device_id} 时间已校时成功，时间为：{stdout}"
+        except Exception as e:
+            return f"{device_id} 设置时间失败 - {str(e)}"
+
+    def upgrade_program(self, ip, password, device_id, system_type):
+        """更新设备节目"""
+        try:
+            device_type = device_id.split('-')[0]
+            remote_file = ""
+
+            os.makedirs(program_path, exist_ok=True)
+
+            if not os.path.exists(f"{program_path}/{device_type}_project.tar.gz"):
+                return f"设备节目不存在，请检查, 并创建：{program_path}/{device_type}_project.tar.gz"
+
+            if "Android" in system_type:
+                remote_file = "/data/media/0/MagicPlayer"
+                stdout= ToolService.adb_push_file(ip, password, f"{program_path}/{device_type}_project.tar.gz", f"{remote_file}/project.tar.gz")
+                stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, f"tar -zxf {remote_file}/project.tar.gz -C {remote_file}", ".")
+                restart_player_cmd = "am start -S cn.huidu.lcd.player/.PlayerActivity"
+            elif "Linux" in system_type:
+                remote_file = "/root/Box/project"
+                stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, "rm /root/Box/project/*.*", ".")
+                stdout= ToolService.pscp_push_file(ip, password, f"{program_path}/{device_type}_project.tar.gz", f"{remote_file}/project.tar.gz")
+                restart_player_cmd = "/root/Box/run.sh"
+                stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, f"tar -zxf {remote_file}/project.tar.gz -C {remote_file}", ".")
+                stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, f"sed -i 's/.*Name=\"DeviceModel\".*/    <Attribute Name=\"DeviceModel\">C16L<\/Attribute>/' {remote_file}/*.boo ; sync ", ".")
+            else:
+                return "不支持该系统类型"
+            stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, f"rm {remote_file}/project.tar.gz", ".")
+            stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, restart_player_cmd, ".")
+            return f"{device_id} 更新节目成功,重启播放器"
+        except Exception as e:
+            return f"{device_id} 更新节目失败 - {str(e)}"
 
     def get_uptime_info(self, ip, password, device_id):
         """

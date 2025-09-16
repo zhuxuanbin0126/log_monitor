@@ -90,7 +90,10 @@ class ControlPanel(QWidget):
         self.monitor_boot_check.setChecked(True)
         self.monitor_start_count_check = QCheckBox("监控播放器启动次数")
         self.monitor_start_count_check.setChecked(True)
-        
+        self.monitor_switch_count_check = QCheckBox("导出开关机日志")
+        self.monitor_switch_count_check.setChecked(False)
+
+
         monitor_layout.addWidget(self.start_monitor_button)
         monitor_layout.addWidget(self.stop_monitor_button)
         monitor_layout.addWidget(self.delay_label)
@@ -99,13 +102,14 @@ class ControlPanel(QWidget):
         monitor_layout.addWidget(self.monitor_time_check)
         monitor_layout.addWidget(self.monitor_boot_check)
         monitor_layout.addWidget(self.monitor_start_count_check)
+        monitor_layout.addWidget(self.monitor_switch_count_check)
         monitor_layout.addStretch()
         
         parent_layout.addWidget(self.monitor_group)
         
     def create_query_control(self, parent_layout):
         """创建查询控制区域"""
-        self.query_group = QGroupBox("查询控制")
+        self.query_group = QGroupBox("查询/控制")
         query_layout = QHBoxLayout(self.query_group)
         
         self.query_all_button = QPushButton("查询所选全部")
@@ -123,11 +127,23 @@ class ControlPanel(QWidget):
         self.query_count_init_button = QPushButton("开关机初始化")
         self.query_count_init_button.clicked.connect(lambda: self.query_selected_clicked.emit("count_init"))
 
+        self.query_sum_switch_button = QPushButton("开关机检查")
+        self.query_sum_switch_button.clicked.connect(lambda: self.query_selected_clicked.emit("sum_switch"))
+
+        self.query_set_time_button = QPushButton("设备校时")
+        self.query_set_time_button.clicked.connect(lambda: self.query_selected_clicked.emit("check_time"))
+
+        self.query_upgrade_program_button = QPushButton("更新节目")
+        self.query_upgrade_program_button.clicked.connect(lambda: self.query_selected_clicked.emit("upgrade_program"))
+
         query_layout.addWidget(self.query_all_button)
         query_layout.addWidget(self.query_time_button)
         query_layout.addWidget(self.query_boot_button)
         query_layout.addWidget(self.query_start_count_button)
         query_layout.addWidget(self.query_count_init_button)
+        query_layout.addWidget(self.query_sum_switch_button)
+        query_layout.addWidget(self.query_set_time_button)
+        query_layout.addWidget(self.query_upgrade_program_button)
         query_layout.addStretch()
         
         parent_layout.addWidget(self.query_group)

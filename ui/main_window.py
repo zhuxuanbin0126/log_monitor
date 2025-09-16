@@ -1,3 +1,4 @@
+import time
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer
 from datetime import datetime
@@ -50,6 +51,8 @@ class MainWindow(BaseWindow):
         self.finalize_layout()
         
         self.find_dev_Thread = None
+
+        self.refresh_device_list()
 
     def init_components(self):
         """初始化各个组件"""
@@ -202,6 +205,11 @@ class MainWindow(BaseWindow):
     
     def start_monitor(self, delay_time, monitor_time, monitor_boot, monitor_start_count):
         """开始监控"""
+        selected_devices = self.device_list_view.get_selected_devices()
+        if not selected_devices:
+            self.log("请先选择要监控的设备")
+            return
+
         if self.monitor_thread and self.monitor_thread.isRunning():
             self.log("监控已经在运行中")
             return
@@ -332,7 +340,7 @@ class MainWindow(BaseWindow):
         """更新设备列表"""
         # 保持已选设备的选择状态
         current_selected = self.device_list_view.get_selected_devices().copy()
-        
+        devices = sorted(devices, key=lambda x: x['id'])
         # 更新设备列表
         self.device_list_view.update_device_table(devices)
         
@@ -372,23 +380,34 @@ class MainWindow(BaseWindow):
                 thread.wait()
         self.query_threads.clear()
         
-        # 开始新的查询
-        query_count = 0
+        # 开始新的查询 变量作为数组传入线程 数据才会改变
+        self.query_count = [0]
+
+        #保存日志结果到CSV文件中
+        self.switch_log_file = None
+        if query_type == "sum_switch":
+            if not os.path.exists("./switch_log"):
+                os.mkdir("./switch_log")
+            self.switch_log_file = open(f"./switch_log/{time.strftime('%Y%m%d%H%M%S',time.localtime())}_switch_log.csv", "w", encoding="utf-8")
+            self.switch_log_file.write("设备ID,累计开机次数,累计网络开机次数\n")
+
+        # 开始查询信息
         for device_info in self.device_list_view.get_devices():
             device_id = device_info['id']
             ip = device_info['ip']
             password = device_info.get('password', '')
-            
+            system_type = device_info.get('system_type', '')
+            self.getdevice_num = len(selected_devices) # 查询设备的数量
             if device_id in selected_devices:
-                query_count += 1
                 # 创建查询线程
-                thread = QueryThread(device_id, ip, password, query_type)
+                thread = QueryThread(device_id, ip, password, query_type, self.control_panel, system_type, self.switch_log_file, self.query_count)
                 thread.result_signal.connect(self.on_query_result)
                 thread.error_signal.connect(lambda msg: self.log(msg, is_error=True))
+                thread.end_signal.connect(self.close_csv_file)
                 self.query_threads.append(thread)
                 thread.start()
         
-        self.log(f"开始查询 {query_count} 台设备的{self.get_query_type_text(query_type)}信息")
+        self.log(f"\n-----------------------------------------------------------------------\n开始查询 {self.getdevice_num} 台设备的{self.get_query_type_text(query_type)}信息")
     
     def get_query_type_text(self, query_type):
         """获取查询类型的文本描述"""
@@ -402,8 +421,19 @@ class MainWindow(BaseWindow):
             return "播放器启动次数"
         elif query_type == "count_init":
             return "开关机初始化"
+        elif query_type == "sum_switch":
+            return "开关机次数"
+        elif query_type == "check_time":
+            return "校时"
+        elif query_type == "upgrade_program":
+            return "更新节目"
         return "未知"
     
+    def close_csv_file(self, query_count):
+        """关闭csv文件"""
+        if query_count == self.getdevice_num:
+            self.switch_log_file.close()
+
     def on_query_result(self, device_id, results):
         """处理查询结果"""
         self.log(f"\n设备 {device_id} 查询结果:")
@@ -446,8 +476,21 @@ class MainWindow(BaseWindow):
                     pass
         
         if "count_init" in results:
-            print("zrh on_query_result count_init",results["count_init"])
-            self.log(f"设备系统类型: {results['count_init']}")
+            self.log(f"设备: {results['count_init']}")
+
+        if "sum_switch" in results:
+            self.log(f"设备: {results['sum_switch']}")
+
+        if "check_time" in results:
+            self.log(f"设备: {results['check_time']}")
+
+        if "output_log" in results:
+            self.log(f"设备: {results['output_log']}")
+
+        if "upgrade_program" in results:
+            self.log(f"设备: {results['upgrade_program']}")
+
+
     def on_monitor_result(self, device_data):
         """处理监控结果并自动导出到Excel"""
         try:
@@ -676,8 +719,9 @@ class MainWindow(BaseWindow):
         """刷新设备列表"""
 
         if not self.find_dev_Thread or not self.find_dev_Thread.isRunning():
+            self.control_panel.refresh_button.setDisabled(True)
             self.log("正在刷新设备列表...")
-            self.find_dev_Thread=ReflashThread(self.control_panel,self.update_device_list)
+            self.find_dev_Thread=ReflashThread(self.control_panel,self.update_device_list,self.log)
             # self.find_dev_Thread.finished.connect(self.find_dev_Thread.quit)
             self.find_dev_Thread.error_signal.connect(lambda msg: self.log(msg, is_error=True))
             self.find_dev_Thread.success_signal.connect(lambda msg: self.log(msg, is_error=False))
