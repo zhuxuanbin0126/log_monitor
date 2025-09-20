@@ -3,14 +3,16 @@
 
 import subprocess
 import os
+import time
 from datetime import datetime, timedelta
 import re
 import json
-from config import supported_dev_types
+from config import supported_dev_types, getinfo_path
+import html
 
 class ToolService:
     """工具服务类，负责与外部工具交互"""
-    
+
     @staticmethod
     def run_command(cmd, encoding='utf-8'):
         """
@@ -56,40 +58,15 @@ class ToolService:
                     # 尝试获取MAC地址和设备名称
                     try:
                         # 初始化连接
-                        ToolService.initialize_connection(ip, password)
-                        
-                        # 获取MAC地址
-                        mac_cmd = 'cat /sys/class/net/eth0/address'
-                        mac_stdout, mac_stderr, _ = ToolService.ssh_execute_command(ip, password, mac_cmd, '.')
-                        if mac_stdout and not mac_stderr:
-                            mac_address = mac_stdout.strip()
-                        
-                        # 检查设备ID前缀是否为C08L、C16L或D16
-                        if device_id.startswith('C08L') or device_id.startswith('C16L') or device_id.startswith('D16'):
-                            device_name_cmd = 'cat /root/Box/config/dev_info.xml'
-                            name_stdout, name_stderr, _ = ToolService.ssh_execute_command(ip, password, device_name_cmd, '.')
-                            if name_stdout and not name_stderr:
-                                name_match = re.search(r'<name len=".*?">(.*?)</name>', name_stdout)
-                                if name_match:
-                                    device_name = name_match.group(1)
-                        else:
-                            # 获取设备名称
-                            device_name_cmd = 'cat /data/data/cn.huidu.lcd.player/files/config/DeviceInfoConfig.xml'
-                            name_stdout, name_stderr, _ = ToolService.ssh_execute_command(ip, password, device_name_cmd, '.')
-                            if name_stdout and not name_stderr:
-                                name_match = re.search(r'<item name="DeviceName">(.*?)</item>', name_stdout)
-                                if name_match:
-                                    device_name = name_match.group(1)
-
-                        system_type_cmd = "getprop ro.build.version.release"
-                        system_stdout, system_Error, _= ToolService.ssh_execute_command(ip, password, system_type_cmd, '.')
-                        if len(system_stdout) != 0:
-                            system_type = f"Android{system_stdout}"
-
-                        else:
-                            system_type_cmd = "cat /proc/version"
-                            system_stdout, system_Error, _= ToolService.ssh_execute_command(ip, password, system_type_cmd, '.')
-                            system_type = f"{system_stdout.split(' ')[0]}"
+                        stdout, stderr, _=ToolService.initialize_connection(ip, password)
+                        if not stderr:
+                            cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {getinfo_path}'
+                            stdout, stderr, returncode = ToolService.run_command(cmd)
+                            print(f"getdeviceinfo {device_id} {stdout}")
+                            if stdout and not stderr:
+                                mac_address = stdout.split(" ")[0]
+                                device_name = html.unescape(stdout.split(" ")[1])
+                                system_type = stdout.split(" ")[2]
 
                     except Exception as e:
                         print(f"获取设备 {device_id} 详细信息时出错: {str(e)}")
@@ -156,7 +133,17 @@ class ToolService:
             os.remove(script_filename)
         
         return stdout.strip(), stderr.strip(), returncode
-    
+
+    def adb_shell_command(self, ip, password, command_script):
+
+        ToolService.run_command(f"adb connect {ip}:5555")
+        cmd = f"adb shell {command_script}"
+        stdout, stderr, returncode = ToolService.run_command(cmd)
+        ToolService.run_command(f"adb disconnect {ip}:5555")
+
+        return stdout.strip(), stderr.strip()
+
+
     @staticmethod
     def initialize_connection(ip, password):
         """

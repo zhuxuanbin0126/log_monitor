@@ -82,10 +82,10 @@ class DeviceListView(QWidget):
         
     def update_device_table(self, devices):
         """更新设备列表表格"""
-        self.devices = devices
-        self.device_table.setRowCount(len(devices))
+        self.devices = list(devices)
+        self.device_table.setRowCount(len(self.devices))
         
-        for row, device_info in enumerate(devices):
+        for row, device_info in enumerate(self.devices):
             device_id = device_info['id']
             
             # 选择框
@@ -128,6 +128,7 @@ class DeviceListView(QWidget):
         # 确保选项列保持较小宽度
         if self.device_table.columnWidth(0) > 60:
             self.device_table.setColumnWidth(0, 60)
+        self.device_table.viewport().update()
             
     def on_device_selected(self, row, column):
         """设备被选择时的处理"""

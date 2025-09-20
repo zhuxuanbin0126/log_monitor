@@ -108,7 +108,8 @@ class DeviceMonitorService:
                 stdout = ToolService.pscp_push_file(ip, password, f"{tool_path}/ntpdate", remote_file)
             else:
                 return "不支持该系统类型"
-            stdout = ToolService.ssh_execute_command(ip, password, f"chmod +x {remote_file} & ntpdate -server ntp.huidu.cn", ".")
+            stdout = ToolService.ssh_execute_command(ip, password, f"chmod +x {remote_file}", ".")
+            stdout = ToolService.ssh_execute_command(ip, password, f"{remote_file} -server ntp.huidu.cn", ".")
             stdout = ToolService.ssh_execute_command(ip, password, "hwclock -w", ".")
             stdout = ToolService.ssh_execute_command(ip, password, f"rm {remote_file}", ".")
             stdout, _, _ = ToolService.ssh_execute_command(ip, password, "date", ".")

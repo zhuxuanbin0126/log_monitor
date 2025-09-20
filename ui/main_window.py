@@ -52,7 +52,7 @@ class MainWindow(BaseWindow):
         
         self.find_dev_Thread = None
 
-        self.refresh_device_list()
+        # self.refresh_device_list()
 
     def init_components(self):
         """初始化各个组件"""
