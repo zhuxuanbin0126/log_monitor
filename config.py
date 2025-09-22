@@ -5,7 +5,7 @@
 
 import os
 
-VERSION = '1.0.1.1'
+VERSION = '1.0.2.0'
 
 getinfo_path = "./tools/getdeviceinfo.sh"
 

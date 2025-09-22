@@ -8,6 +8,7 @@ import re
 from .base_window import BaseWindow
 from .control_panel import ControlPanel
 from .device_list_view import DeviceListView
+from .reflash_device_threadpool import GetDeviceInfoManager
 from .result_display_view import ResultDisplayView
 from .monitor_thread import MonitorThread
 from .query_thread import QueryThread
@@ -16,7 +17,8 @@ from .reflash_device_thread import ReflashThread
 from service.tool_service import ToolService
 from service.file_service import FileService
 from service.data_processing_service import DataProcessingService
-from config import get_base_dir
+from config import get_base_dir, supported_dev_types
+
 
 class MainWindow(BaseWindow):
     """主窗口类，作为控制器协调各个组件的工作"""
@@ -25,11 +27,13 @@ class MainWindow(BaseWindow):
         super().__init__()
         
         # 初始化变量
+        self.devices = None
         self.monitor_thread = None
         self.query_threads = []
         self.dev_type = ControlPanel().dev_type
         self.notepad_process = None  # 用于跟踪记事本进程
         self.excel_file = None  # 用于存储当前使用的Excel文件名
+        self.Manager = None
         
         # 初始化日志文件
         base_dir = get_base_dir(self.dev_type)
@@ -718,14 +722,64 @@ class MainWindow(BaseWindow):
     def refresh_device_list(self):
         """刷新设备列表"""
 
-        if not self.find_dev_Thread or not self.find_dev_Thread.isRunning():
+        try:
+            # 获取当前查询设备类型
+            dev_type = self.control_panel.dev_type
+            # 禁用刷新按钮
             self.control_panel.refresh_button.setDisabled(True)
-            self.log("正在刷新设备列表...")
-            self.find_dev_Thread=ReflashThread(self.control_panel,self.update_device_list,self.log)
-            # self.find_dev_Thread.finished.connect(self.find_dev_Thread.quit)
-            self.find_dev_Thread.error_signal.connect(lambda msg: self.log(msg, is_error=True))
-            self.find_dev_Thread.success_signal.connect(lambda msg: self.log(msg, is_error=False))
-            self.find_dev_Thread.start()
+            # 调用DeviceId.exe
+            stdout, stderr, _ = ToolService.run_command('DeviceId.exe')
+            if stderr:
+                print(f"DeviceId.exe 错误: {stderr}")
+                return []
+            # 初始化devices数组
+            self.devices = []
+            # 配置正则表达式
+            pattern = dev_type.replace('-', '|')
+            # 创建GetDeviceInfoManager线程池
+            print(f"创建任务列表：",len(stdout.split("\n")))
+            self.Manager = GetDeviceInfoManager(pattern, max_workers=4, queue_size=len(stdout.split("\n")))
+            self.Manager.taskCompleted.connect(self.refresh_device_flash)
+            self.Manager.allTasksCompleted.connect(self.device_info_to_list)
+            # 提交任务
+            for line in stdout.split("\n"):
+                if line.strip().split("-")[0] in supported_dev_types and re.match(f"^({pattern})", line):
+                    self.Manager.submit_task(line)
+            return None
+
+        except Exception as e:
+            self.log(f"刷新设备列表失败: {str(e)}")
+            # 恢复刷新按钮
+            self.control_panel.refresh_button.setEnabled(True)
+            # 释放线程池
+            self.Manager.check_timer.stop()
+            self.Manager.taskCompleted.disconnect()
+            self.Manager.allTasksCompleted.disconnect()
+            self.Manager = None
+            return None
+
+    def refresh_device_flash(self, device_info):
+        """执行完成后执行的操作"""
+        if device_info:
+            self.devices.append(device_info)
+    def device_info_to_list(self):
+        print(f"device_info_to_list {self.devices}")
+        self.Manager.check_timer.stop()
+        self.Manager.taskCompleted.disconnect()
+        self.Manager.allTasksCompleted.disconnect()
+        self.Manager = None
+        try:
+            self.update_device_list(self.devices)
+
+            # 更新刷新状态标签
+            self.control_panel.update_refresh_status(f"当前设备数: {len(self.devices)}")
+
+            self.log(f"设备列表已刷新，共 {len(self.devices)} 台设备")
+
+        except Exception as e:
+            self.log(f"刷新设备列表失败: {str(e)}")
+
+        self.control_panel.refresh_button.setEnabled(True)
 
     def monitor_device(self, device):
         """监控单个设备"""

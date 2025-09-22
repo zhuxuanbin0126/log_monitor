@@ -10,3 +10,5 @@ output
 *Test
 .*
 program
+device_monitoring_data.json
+device_error.txt

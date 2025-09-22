@@ -82,6 +82,53 @@ class ToolService:
                     })
         
         return devices
+
+    @staticmethod
+    def get_device_info(device_stdout, pattern):
+        """
+        调用DeviceId.exe获取设备列表
+        """
+
+        # 过滤符合模式的设备
+        if device_stdout.split("-")[0] not in supported_dev_types:
+            return None
+
+        if re.match(f"^({pattern})", device_stdout):
+            parts = device_stdout.strip().split()
+            if len(parts) >= 2:
+                device_id = parts[0]
+                ip = parts[1]
+                password = ToolService.get_password(device_id)
+                # 初始设置为未知
+                mac_address = "未知"
+                device_name = "未知"
+                system_type = "未知"
+                # 尝试获取MAC地址和设备名称
+                try:
+                    # 初始化连接
+                    stdout, stderr, _ = ToolService.initialize_connection(ip, password)
+                    if not stderr:
+                        cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {getinfo_path}'
+                        stdout, stderr, returncode = ToolService.run_command(cmd)
+                        print(f"getdeviceinfo {device_id} {stdout}")
+                        if stdout and not stderr:
+                            mac_address = stdout.split(" ")[0]
+                            device_name = html.unescape(stdout.split(" ")[1])
+                            system_type = stdout.split(" ")[2]
+                except Exception as e:
+                    print(f"获取设备 {device_id} 详细信息时出错: {str(e)}")
+
+                # 将所有设备信息存储为字典
+                device_info={
+                    'id': device_id,
+                    'ip': ip,
+                    'password': password,
+                    'mac_address': mac_address,
+                    'device_name': device_name,
+                    "system_type": system_type
+                }
+
+        return device_info
     
     @staticmethod
     def get_password(device_id):
