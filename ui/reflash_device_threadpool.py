@@ -62,7 +62,15 @@ class QRunnableWrapper(QRunnable):
 
     def run(self):
         try:
-            devices = ToolService.get_device_info(self.devices_info, self.pattern)
+            """增加重试机制"""
+            for i in range(3):
+                devices = ToolService.get_device_info(self.devices_info, self.pattern)
+                # print(f"查询设备 {self.devices_info} 第 {i+1} 次结果: {devices}")
+                if devices["mac_address"]  != "未知":
+                    break
+                else:
+                    time.sleep(0.1)
+
             # 将获取到的信息返回给主线程
             self.completed_signal.emit(devices)
         except Exception as e:

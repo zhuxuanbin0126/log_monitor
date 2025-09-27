@@ -130,6 +130,9 @@ class ControlPanel(QWidget):
         self.query_sum_switch_button = QPushButton("开关机检查")
         self.query_sum_switch_button.clicked.connect(lambda: self.query_selected_clicked.emit("sum_switch"))
 
+        self.query_clean_switch_button = QPushButton("清除开关机日志")
+        self.query_clean_switch_button.clicked.connect(lambda: self.query_selected_clicked.emit("clean_switch"))
+
         self.query_set_time_button = QPushButton("设备校时")
         self.query_set_time_button.clicked.connect(lambda: self.query_selected_clicked.emit("check_time"))
 
@@ -142,6 +145,7 @@ class ControlPanel(QWidget):
         query_layout.addWidget(self.query_start_count_button)
         query_layout.addWidget(self.query_count_init_button)
         query_layout.addWidget(self.query_sum_switch_button)
+        query_layout.addWidget(self.query_clean_switch_button)
         query_layout.addWidget(self.query_set_time_button)
         query_layout.addWidget(self.query_upgrade_program_button)
         query_layout.addStretch()

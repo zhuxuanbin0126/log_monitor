@@ -63,6 +63,16 @@ class QueryThread(QThread):
                     results['output_log'] = output_log
                 results['sum_switch'] = f"{self.device_id} 当前开关机次数为：{switch_time} 网络开关机次数为：{network_time}"
 
+            if self.query_type == "clean_switch":
+                if "Linux" in self.system_type:
+                    path = "/root/Box/project"
+                elif "Android" in self.system_type:
+                    path = "/data"
+                else:
+                    raise ValueError("暂不支持此系统类型")
+                output_log = monitor_service.clean_switch_log(self.ip, self.password, self.device_id, path)
+                results['clean_switch'] = f"{self.device_id} 开关机记录已清除"
+
             if self.query_type == "check_time":
                 results_log = monitor_service.ntptime_checkout_time(self.ip, self.password, self.device_id, self.system_type)
                 results['check_time'] = results_log

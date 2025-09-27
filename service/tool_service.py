@@ -110,7 +110,7 @@ class ToolService:
                     if not stderr:
                         cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {getinfo_path}'
                         stdout, stderr, returncode = ToolService.run_command(cmd)
-                        print(f"getdeviceinfo {device_id} {stdout}")
+                        # print(f"getdeviceinfo {device_id} {stdout}")
                         if stdout and not stderr:
                             mac_address = stdout.split(" ")[0]
                             device_name = html.unescape(stdout.split(" ")[1])

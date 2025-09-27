@@ -50,7 +50,7 @@ class DeviceMonitorService:
                 ToolService.adb_push_file(ip, password, f"{tool_path}/boot_counter.sh", "/system/bin/")
                 ToolService.adb_push_file(ip, password, f"{tool_path}/init.rk356x.rc", "/vendor/etc/init/hw")
                 ToolService.ssh_execute_command(ip, password, "touch /data/swich_counter_flag", ".")
-
+            ToolService.ssh_execute_command(ip, password, "sync", ".")
             return f"{device_id} 设置开关机成功"
         except Exception as e:
             return f"{device_id} 设置开关机失败 - {str(e)}"
@@ -73,6 +73,22 @@ class DeviceMonitorService:
         except Exception as e:
             return f"{device_id} 获取累计开机次数失败 - {str(e)}"
         return switch_time, network_time
+
+    def clean_switch_log(self, ip, password, device_id, path):
+        """
+        清除开关机日志
+        """
+        try:
+            cmd = f"ls {path}/swich_counter.csv && rm -rf {path}/swich_counter.csv"
+            stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, cmd, ".")
+            cmd = f"ls {path}/network_counter.csv && rm -rf {path}/network_counter.csv"
+            stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, cmd, ".")
+            cmd = f"ls {path}/logcat && rm -rf {path}/logcat"
+            stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, cmd, ".")
+            cmd = f"ls {path}/ping && rm -rf {path}/ping"
+            stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, cmd, ".")
+        except Exception as e:
+            return f"{device_id} 清除累计开机次数失败 - {str(e)}"
 
     def switch_log_output(self, ip, password, device_id, system_type, path):
         try:
@@ -102,7 +118,7 @@ class DeviceMonitorService:
             remote_file = ""
             if "Android" in system_type:
                 remote_file = "/system/bin/ntpdate"
-                stdout = ToolService.adb_pull_file(ip, password, f"{tool_path}/ntpdate", remote_file)
+                stdout = ToolService.adb_push_file(ip, password, f"{tool_path}/ntpdate", remote_file)
             elif "Linux" in system_type:
                 remote_file = "/bin/ntpdate"
                 stdout = ToolService.pscp_push_file(ip, password, f"{tool_path}/ntpdate", remote_file)
@@ -139,7 +155,7 @@ class DeviceMonitorService:
                 stdout= ToolService.pscp_push_file(ip, password, f"{program_path}/{device_type}_project.tar.gz", f"{remote_file}/project.tar.gz")
                 restart_player_cmd = "/root/Box/run.sh"
                 stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, f"tar -zxf {remote_file}/project.tar.gz -C {remote_file}", ".")
-                stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, f"sed -i 's/.*Name=\"DeviceModel\".*/    <Attribute Name=\"DeviceModel\">C16L<\/Attribute>/' {remote_file}/*.boo ; sync ", ".")
+                # stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, f"sed -i 's/.*Name=\"DeviceModel\".*/    <Attribute Name=\"DeviceModel\">C16L<\/Attribute>/' {remote_file}/*.boo ; sync ", ".")
             else:
                 return "不支持该系统类型"
             stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, f"rm {remote_file}/project.tar.gz", ".")

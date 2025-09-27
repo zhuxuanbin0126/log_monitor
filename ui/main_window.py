@@ -427,6 +427,8 @@ class MainWindow(BaseWindow):
             return "开关机初始化"
         elif query_type == "sum_switch":
             return "开关机次数"
+        elif query_type == "clean_switch":
+            return "清除日志"
         elif query_type == "check_time":
             return "校时"
         elif query_type == "upgrade_program":
@@ -484,6 +486,9 @@ class MainWindow(BaseWindow):
 
         if "sum_switch" in results:
             self.log(f"设备: {results['sum_switch']}")
+
+        if "clean_switch" in results:
+            self.log(f"设备: {results['clean_switch']}")
 
         if "check_time" in results:
             self.log(f"设备: {results['check_time']}")
@@ -763,7 +768,7 @@ class MainWindow(BaseWindow):
         if device_info:
             self.devices.append(device_info)
     def device_info_to_list(self):
-        print(f"device_info_to_list {self.devices}")
+        # print(f"device_info_to_list {self.devices}")
         self.Manager.check_timer.stop()
         self.Manager.taskCompleted.disconnect()
         self.Manager.allTasksCompleted.disconnect()
