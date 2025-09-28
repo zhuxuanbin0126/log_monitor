@@ -10,12 +10,13 @@ class MonitorThread(QThread):
     error_signal = pyqtSignal(str, str, str)  # 修改为包含device_id和ip参数
     monitor_result_signal = pyqtSignal(dict)
     
-    def __init__(self, dev_type, delay_time, monitor_time=True, monitor_boot=True, monitor_start_count=True):
+    def __init__(self, dev_type, delay_time, selected_devices, monitor_time=True, monitor_boot=True, monitor_start_count=True):
         super().__init__()
         self.dev_type = dev_type
         self.delay_time = delay_time
         self.monitor_time = monitor_time
         self.monitor_boot = monitor_boot
+        self.selected_devices = selected_devices
         self.monitor_start_count = monitor_start_count
         self.running = False
         self.monitor_service = None
@@ -28,9 +29,7 @@ class MonitorThread(QThread):
             
             while self.running:
                 # 获取设备列表
-                devices = ToolService.get_device_list(self.dev_type)
-                self.device_list_signal.emit(devices)
-                self.update_signal.emit(f"发现 {len(devices)} 台设备")
+                devices = self.selected_devices
                 
                 has_new_errors = False
                 

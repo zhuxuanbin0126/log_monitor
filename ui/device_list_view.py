@@ -16,6 +16,7 @@ class DeviceListView(QWidget):
         super().__init__(parent)
         self.devices = []  # 存储设备信息字典的列表
         self.selected_devices = set()
+        self.selected_devices_info = []
         self.init_ui()
         
     def init_ui(self):
@@ -138,8 +139,16 @@ class DeviceListView(QWidget):
             
             if check_state == Qt.Checked:
                 self.selected_devices.add(device_id)
+                for info in self.devices:
+                    if info['id'] == device_id:
+                        self.selected_devices_info.append(info)
+                # self.selected_devices_info.append(dict(info for info in self.devices if info['id'] == device_id))
             else:
                 self.selected_devices.discard(device_id)
+                for info in self.devices:
+                    if info['id'] == device_id:
+                        self.selected_devices_info.remove(info)
+                # self.selected_devices_info.remove(dict(info for info in self.devices if info['id'] == device_id))
             
             # 发出选中设备变化的信号
             self.device_selected.emit(self.selected_devices)
@@ -149,16 +158,17 @@ class DeviceListView(QWidget):
         if state == Qt.Checked:
             for device_info in self.devices:
                 self.selected_devices.add(device_info['id'])
+                self.selected_devices_info = self.devices
         else:
             self.selected_devices.clear()
+            self.selected_devices_info = []
         
         # 只更新复选框状态，不重新创建表格，避免改变行间距
         for row in range(self.device_table.rowCount()):
-            if row < len(self.devices):
-                device_id = self.devices[row]['id']
-                check_item = self.device_table.item(row, 0)
-                if check_item:
-                    check_item.setCheckState(Qt.Checked if device_id in self.selected_devices else Qt.Unchecked)
+            device_id = self.devices[row]['id']
+            check_item = self.device_table.item(row, 0)
+            if check_item:
+                check_item.setCheckState(Qt.Checked if device_id in self.selected_devices else Qt.Unchecked)
         
         # 发出选中设备变化的信号
         self.device_selected.emit(self.selected_devices)
@@ -239,6 +249,10 @@ class DeviceListView(QWidget):
     def get_selected_devices(self):
         """获取选中的设备列表"""
         return self.selected_devices
+
+    def get_selected_devices_info(self):
+        """获取选中的设备列表信息"""
+        return self.selected_devices_info
         
     def get_devices(self):
         """获取所有设备列表"""

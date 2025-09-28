@@ -209,16 +209,21 @@ class MainWindow(BaseWindow):
     
     def start_monitor(self, delay_time, monitor_time, monitor_boot, monitor_start_count):
         """开始监控"""
-        selected_devices = self.device_list_view.get_selected_devices()
+        if len(self.device_list_view.get_devices()) == 0:
+            self.log("请先刷新设备列表")
+            return
+
+        selected_devices = self.device_list_view.get_selected_devices_info()
         if not selected_devices:
             self.log("请先选择要监控的设备")
             return
+
 
         if self.monitor_thread and self.monitor_thread.isRunning():
             self.log("监控已经在运行中")
             return
         
-        self.monitor_thread = MonitorThread(self.dev_type, delay_time, monitor_time, monitor_boot, monitor_start_count)
+        self.monitor_thread = MonitorThread(self.dev_type, delay_time, selected_devices, monitor_time, monitor_boot, monitor_start_count)
         self.monitor_thread.update_signal.connect(self.log)
         self.monitor_thread.device_list_signal.connect(self.on_device_list_updated)
         self.monitor_thread.status_signal.connect(self.update_status_bar)
@@ -742,7 +747,7 @@ class MainWindow(BaseWindow):
             # 配置正则表达式
             pattern = dev_type.replace('-', '|')
             # 创建GetDeviceInfoManager线程池
-            print(f"创建任务列表：",len(stdout.split("\n")))
+            # print(f"创建任务列表：",len(stdout.split("\n")))
             self.Manager = GetDeviceInfoManager(pattern, max_workers=4, queue_size=len(stdout.split("\n")))
             self.Manager.taskCompleted.connect(self.refresh_device_flash)
             self.Manager.allTasksCompleted.connect(self.device_info_to_list)
