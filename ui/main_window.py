@@ -1,8 +1,9 @@
 import time
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import QTimer
 from datetime import datetime
 import os
+import shutil
 import re
 
 from .base_window import BaseWindow
@@ -207,7 +208,7 @@ class MainWindow(BaseWindow):
         # 重新刷新设备列表
         self.refresh_device_list()
     
-    def start_monitor(self, delay_time, monitor_time, monitor_boot, monitor_start_count):
+    def start_monitor(self, delay_time, monitor_time, monitor_boot, monitor_start_count, capture_screenshot=False, clear_history=False, screenshot_path="./screenshot"):
         """开始监控"""
         if len(self.device_list_view.get_devices()) == 0:
             self.log("请先刷新设备列表")
@@ -218,17 +219,196 @@ class MainWindow(BaseWindow):
             self.log("请先选择要监控的设备")
             return
 
-
         if self.monitor_thread and self.monitor_thread.isRunning():
             self.log("监控已经在运行中")
             return
         
-        self.monitor_thread = MonitorThread(self.dev_type, delay_time, selected_devices, monitor_time, monitor_boot, monitor_start_count)
+        # 处理清除历史数据
+        if clear_history:
+            self.log("开始清除历史监控数据...")
+            self.clear_history_data()
+            self.log("历史监控数据清除完成")
+        
+        # 第一次获取设备信息，检测设备在线情况和可执行性
+        self.log("开始第一次获取设备信息，检测设备在线情况...")
+        
+        # 创建监控服务实例
+        from business.device_monitor_service import DeviceMonitorService
+        monitor_service = DeviceMonitorService(self.dev_type)
+        
+        # 存储第一次获取的设备信息
+        first_time_data = {}
+        online_count = 0
+        offline_count = 0
+        error_count = 0
+        
+        # 存储截图失败的设备
+        screenshot_failed_devices = []
+        
+        # 存储各项检测失败的设备
+        time_failed_devices = []
+        boot_failed_devices = []
+        start_count_failed_devices = []
+        
+        # 遍历所有选中的设备
+        for device_info in selected_devices:
+            device_id = device_info['id']
+            ip = device_info['ip']
+            password = device_info['password']
+            
+            try:
+                # 检查设备状态
+                errors = monitor_service.check_device_status(
+                    device_id, ip, password, 
+                    monitor_time=monitor_time, 
+                    monitor_boot=monitor_boot, 
+                    monitor_start_count=monitor_start_count
+                )
+                
+                # 保存第一次获取的数据
+                if device_id in monitor_service.device_data:
+                    first_time_data[device_id] = monitor_service.device_data[device_id].copy()
+                    
+                    # 检查各项数据是否获取成功
+                    device_data = monitor_service.device_data[device_id]
+                    
+                    # 检查设备时间获取情况
+                    if monitor_time and ('initial_card_time' not in device_data or device_data.get('initial_card_time') == 'N/A'):
+                        time_failed_devices.append(device_id)
+                        self.log(f"设备 {device_id} ({ip}) 设备时间获取失败")
+                    
+                    # 检查启动时间获取情况
+                    if monitor_boot and ('initial_boot_time' not in device_data or device_data.get('initial_boot_time') == 'N/A'):
+                        boot_failed_devices.append(device_id)
+                        self.log(f"设备 {device_id} ({ip}) 启动时间获取失败")
+                    
+                    # 检查启动次数获取情况
+                    if monitor_start_count and ('initial_start_count' not in device_data or device_data.get('initial_start_count') == 'N/A'):
+                        start_count_failed_devices.append(device_id)
+                        self.log(f"设备 {device_id} ({ip}) 启动次数获取失败")
+                
+                # 统计设备状态
+                if errors:
+                    error_count += 1
+                    self.log(f"设备 {device_id} ({ip}) 存在错误: {len(errors)} 个")
+                else:
+                    online_count += 1
+                    # 检查是否有时间异常（时间差大于±3s）
+                    time_diff = monitor_service.device_data.get(device_id, {}).get('initial_time_diff', 0)
+                    if abs(time_diff) > 3:
+                        self.log(f"设备 {device_id} ({ip}) 在线，但存在时间异常，时间差: {time_diff}s")
+                    else:
+                        self.log(f"设备 {device_id} ({ip}) 在线，状态正常")
+                
+                # 如果需要截图，尝试执行截图
+                if capture_screenshot:
+                    try:
+                        # 获取设备系统类型
+                        system_type = "Android"  # 简化处理，假设为Android系统
+                        screenshot_result = monitor_service.capture_screenshot(device_id, ip, password, system_type, screenshot_path)
+                        if screenshot_result and (screenshot_result.startswith("设备") or "执行截图命令失败" in screenshot_result):
+                            # 截图失败
+                            screenshot_failed_devices.append(device_id)
+                            self.log(f"设备 {device_id} ({ip}) 截图失败: {screenshot_result}")
+                        else:
+                            self.log(f"设备 {device_id} ({ip}) 截图成功: {screenshot_result}")
+                    except Exception as e:
+                        screenshot_failed_devices.append(device_id)
+                        self.log(f"设备 {device_id} ({ip}) 截图时出错: {str(e)}")
+            except Exception as e:
+                offline_count += 1
+                self.log(f"设备 {device_id} ({ip}) 离线或无法连接: {str(e)}")
+        
+        # 统计时间异常的设备数量和列表
+        time_error_count = 0
+        time_error_devices = []
+        time_error_details = []
+        for device_id, data in first_time_data.items():
+            time_diff = data.get('initial_time_diff', 0)
+            if abs(time_diff) > 3:
+                time_error_count += 1
+                time_error_devices.append(device_id)
+                time_error_details.append(f"{device_id} ({time_diff}秒)")
+        
+        # 生成监控摘要
+        summary = f"监控摘要:\n"
+        summary += f"总设备数: {len(selected_devices)}\n"
+        summary += f"在线设备数: {online_count}\n"
+        summary += f"离线设备数: {offline_count}\n"
+        summary += f"存在错误的设备数: {error_count}\n"
+        summary += f"存在时间异常的设备数: {time_error_count}\n"
+        summary += f"监控类型: {self.dev_type}\n"
+        summary += f"查询间隔: {delay_time}秒\n"
+        summary += f"监控项目: {'设备时间' if monitor_time else ''}{'、启动时间' if monitor_boot else ''}{'、启动次数' if monitor_start_count else ''}{'、截图' if capture_screenshot else ''}\n"
+        
+        # 如果有时间差较大的设备，列举设备名称和偏差值并提示时间异常处理
+        if time_error_devices:
+            summary += f"时间异常设备: {', '.join(time_error_details)}\n"
+            summary += f"时间异常处理: 以当前时间差为基准，后续监控只关注日均偏差是否大于±3s\n"
+        
+        # 如果有设备时间获取失败的设备，列举设备名称
+        if time_failed_devices:
+            summary += f"设备时间获取失败设备: {', '.join(time_failed_devices)}\n"
+            summary += f"设备时间获取失败处理: 后续监控将不对这些设备进行设备时间检测\n"
+        
+        # 如果有启动时间获取失败的设备，列举设备名称
+        if boot_failed_devices:
+            summary += f"启动时间获取失败设备: {', '.join(boot_failed_devices)}\n"
+            summary += f"启动时间获取失败处理: 后续监控将不对这些设备进行启动时间检测\n"
+        
+        # 如果有启动次数获取失败的设备，列举设备名称
+        if start_count_failed_devices:
+            summary += f"启动次数获取失败设备: {', '.join(start_count_failed_devices)}\n"
+            summary += f"启动次数获取失败处理: 后续监控将不对这些设备进行启动次数检测\n"
+        
+        # 如果有截图失败的设备，列举设备名称
+        if screenshot_failed_devices:
+            summary += f"截图失败设备: {', '.join(screenshot_failed_devices)}\n"
+            summary += f"截图失败处理: 后续监控将不对这些设备进行截图操作\n"
+        
+        self.log(summary)
+        
+        # 弹窗确认
+        reply = QMessageBox.question(
+            self, 
+            "监控确认", 
+            f"{summary}\n\n是否开始正式监控？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.No:
+            self.log("监控已取消")
+            return
+        
+        # 开始正式监控
+        self.log("开始正式监控任务...")
+        
+        # 创建监控线程
+        self.monitor_thread = MonitorThread(
+            self.dev_type, 
+            delay_time, 
+            selected_devices, 
+            monitor_time, 
+            monitor_boot, 
+            monitor_start_count, 
+            capture_screenshot, 
+            first_time_data,  # 传递第一次获取的数据作为基准
+            screenshot_path,  # 传递截图存储路径
+            screenshot_failed_devices,  # 传递截图失败的设备列表
+            time_failed_devices,  # 传递设备时间获取失败的设备列表
+            boot_failed_devices,  # 传递启动时间获取失败的设备列表
+            start_count_failed_devices  # 传递启动次数获取失败的设备列表
+        )
+        
+        # 连接信号
         self.monitor_thread.update_signal.connect(self.log)
         self.monitor_thread.device_list_signal.connect(self.on_device_list_updated)
         self.monitor_thread.status_signal.connect(self.update_status_bar)
         self.monitor_thread.error_signal.connect(self.handle_error)
         self.monitor_thread.monitor_result_signal.connect(self.on_monitor_result)
+        
+        # 启动线程
         self.monitor_thread.start()
         
         # 更新控制面板状态
@@ -237,7 +417,17 @@ class MainWindow(BaseWindow):
         # 暂停自动刷新
         # self.auto_refresh_timer.stop()
         
-        self.log(f"开始监控 {self.dev_type} 类型设备，查询间隔为 {delay_time} 秒")
+        # 记录开始监控的日志
+        if self.dev_type == 'A-B-C-D-H':
+            if capture_screenshot:
+                self.log(f"开始监控所有类型的设备，查询间隔为 {delay_time} 秒，同时获取运行画面")
+            else:
+                self.log(f"开始监控所有类型的设备，查询间隔为 {delay_time} 秒")
+        else:
+            if capture_screenshot:
+                self.log(f"开始监控 {self.dev_type} 类型设备，查询间隔为 {delay_time} 秒，同时获取运行画面")
+            else:
+                self.log(f"开始监控 {self.dev_type} 类型设备，查询间隔为 {delay_time} 秒")
     
     def stop_monitor(self):
         """停止监控"""
@@ -504,6 +694,9 @@ class MainWindow(BaseWindow):
         if "upgrade_program" in results:
             self.log(f"设备: {results['upgrade_program']}")
 
+        if "screenshot" in results:
+            self.log(f"设备: {results['screenshot']}")
+
 
     def on_monitor_result(self, device_data):
         """处理监控结果并自动导出到Excel"""
@@ -525,9 +718,17 @@ class MainWindow(BaseWindow):
         
         # 初始化Excel文件名，只在第一次创建时生成
         if not self.excel_file:
+            # 确保output/excel目录存在
+            excel_dir = './output/excel'
+            os.makedirs(excel_dir, exist_ok=True)
             # 生成文件名，格式：[dev_type]_[yy-mm-dd_HH-MM-SS].xlsx
             current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            self.excel_file = f'{self.dev_type}_{current_time}.xlsx'
+            self.excel_file = f'{excel_dir}/{self.dev_type}_{current_time}.xlsx'
+        else:
+            # 确保目录存在
+            excel_dir = os.path.dirname(self.excel_file)
+            if excel_dir:
+                os.makedirs(excel_dir, exist_ok=True)
         
         # 创建数据列表
         data = []
@@ -656,8 +857,9 @@ class MainWindow(BaseWindow):
             self.log(f"写入Excel文件时出错: {str(e)}", is_error=True)
             return
         
-        # 记录导出日志
-        self.log(f"监控结果已成功导出到 {os.path.abspath(self.excel_file)}")
+        # 记录导出日志，统一使用正斜杠
+        excel_path = os.path.abspath(self.excel_file).replace('\\', '/')
+        self.log(f"监控结果已成功导出到 {excel_path}")
     
     def log(self, message, is_error=False, is_warning=False):
         """记录日志，支持错误(红色)、警告(黄色)和正常(黑色)消息"""
@@ -719,8 +921,77 @@ class MainWindow(BaseWindow):
         # 这里可以添加清空日志时的额外处理逻辑
         pass
         
+    def clear_history_data(self):
+        """清除历史监控数据"""
+        # 定义要清除的文件和文件夹
+        folders_to_clear = [
+            "./output",
+            "./screenshot",
+            "./switch_log",
+            "./monitor_data"
+        ]
+        
+        files_to_clear = [
+            "device_data.json",
+            "device_errors.txt",
+            "device_error.txt"
+        ]
+        
+        # 清除文件夹
+        for folder in folders_to_clear:
+            if os.path.exists(folder):
+                try:
+                    shutil.rmtree(folder)
+                    self.log(f"已清除文件夹: {folder}")
+                except Exception as e:
+                    self.log(f"清除文件夹 {folder} 时出错: {str(e)}")
+        
+        # 清除文件
+        for file in files_to_clear:
+            if os.path.exists(file):
+                try:
+                    os.remove(file)
+                    self.log(f"已清除文件: {file}")
+                except Exception as e:
+                    self.log(f"清除文件 {file} 时出错: {str(e)}")
+        
+        # 清除监控类型对应的日志文件夹
+        from config import supported_dev_types
+        for dev_type in supported_dev_types:
+            if os.path.exists(dev_type):
+                try:
+                    shutil.rmtree(dev_type)
+                    self.log(f"已清除监控类型文件夹: {dev_type}")
+                except Exception as e:
+                    self.log(f"清除监控类型文件夹 {dev_type} 时出错: {str(e)}")
+        
+        # 清除Excel文件
+        for file in os.listdir("."):
+            if file.endswith(".xlsx"):
+                try:
+                    os.remove(file)
+                    self.log(f"已清除Excel文件: {file}")
+                except Exception as e:
+                    self.log(f"清除Excel文件 {file} 时出错: {str(e)}")
+    
     def closeEvent(self, event):
-        """窗口关闭时的处理"""
+        """
+        窗口关闭时的处理
+        """
+        # 检查监控是否正在运行
+        if hasattr(self, 'monitor_thread') and self.monitor_thread and self.monitor_thread.isRunning():
+            reply = QMessageBox.question(
+                self, 
+                "关闭确认", 
+                "监控正在运行中，确定要关闭应用程序吗？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            
+            if reply == QMessageBox.No:
+                event.ignore()
+                return
+        
         self.stop_monitor()
         # self.auto_refresh_timer.stop()  # 停止自动刷新定时器
         for thread in self.query_threads:
@@ -815,7 +1086,7 @@ class MainWindow(BaseWindow):
         row = {
             '设备': device,
             '设备时间': device_time,
-            '时间差': time_diff,
+            '与电脑当前的时间差': time_diff,
             '系统时间': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         file = 'device_time.xlsx'

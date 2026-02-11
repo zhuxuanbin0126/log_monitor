@@ -81,6 +81,10 @@ class QueryThread(QThread):
                 results_upgrade_program = monitor_service.upgrade_program(self.ip, self.password, self.device_id, self.system_type)
                 results['upgrade_program'] = results_upgrade_program
 
+            if self.query_type == "screenshot":
+                screenshot_result = monitor_service.capture_screenshot(self.device_id, self.ip, self.password, self.system_type)
+                results['screenshot'] = screenshot_result
+
             self.result_signal.emit(self.device_id, results)
             self.end_signal.emit(self.query_count[0])
         except Exception as e:

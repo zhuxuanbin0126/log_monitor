@@ -81,7 +81,7 @@ class DataProcessingService:
         }
     
     @staticmethod
-    def process_time_difference(initial_time_diff, current_time_diff, threshold=3):
+    def process_time_difference(initial_time_diff, current_time_diff, threshold=3, days_passed=1):
         """
         处理设备时间差异数据，生成结构化错误信息
         
@@ -89,15 +89,20 @@ class DataProcessingService:
         initial_time_diff: 初始时间差（秒）
         current_time_diff: 当前时间差（秒）
         threshold: 时间差异常阈值（秒）
+        days_passed: 数据收集周期（天），默认1天
         
         返回:
         结构化的错误信息字典
         """
-        # 计算日均误差（假设数据收集周期为1天）
-        daily_average = abs(current_time_diff - initial_time_diff) / 6  # 假设6天收集周期
+        # 确保days_passed至少为1，避免除零错误
+        if days_passed < 1:
+            days_passed = 1
+        
+        # 计算日均误差
+        daily_average = abs(current_time_diff - initial_time_diff) / days_passed
         
         # 判断是否超过阈值
-        is_abnormal = abs(current_time_diff) > threshold or daily_average > threshold / 6
+        is_abnormal = abs(current_time_diff) > threshold or daily_average > threshold
         
         if not is_abnormal:
             return None
@@ -105,8 +110,8 @@ class DataProcessingService:
         # 生成结构化错误信息
         error_info = {
             'type': '时间同步异常',
-            'process': f'初始时间差: {initial_time_diff}秒, 当前时间差: {current_time_diff}秒',
-            'difference': f'日均{daily_average:.2f}秒'
+            'process': f'第一次获取时与电脑的时间差: {initial_time_diff}秒, 当前与电脑的时间差: {current_time_diff}秒',
+            'difference': f'日均{daily_average:.2f}秒 (收集周期: {days_passed}天)'
         }
         
         return error_info

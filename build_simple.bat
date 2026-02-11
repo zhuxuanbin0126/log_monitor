@@ -31,16 +31,22 @@ pyinstaller ^
     --onefile ^
     --windowed ^
     --name "log_monitor" ^
-    --add-data "DeviceId.exe;." ^
-    --add-data "bash.exe;." ^
-    --add-data "grep.exe;." ^
-    --add-data "plink.exe;." ^
-    --add-data "config.py;." ^
+    --add-data "DeviceId.exe;" ^
+    --add-data "bash.exe;" ^
+    --add-data "grep.exe;" ^
+    --add-data "plink.exe;" ^
+    --add-data "pscp.exe;" ^
+    --add-data "adb.exe;" ^
+    --add-data "AdbWinApi.dll;" ^
+    --add-data "AdbWinUsbApi.dll;" ^
+    --add-data "config.py;" ^
     --hidden-import "pandas" ^
     --hidden-import "openpyxl" ^
     --hidden-import "PyQt5.QtWidgets" ^
     --hidden-import "PyQt5.QtCore" ^
     --hidden-import "PyQt5.QtGui" ^
+    --upx ^
+    --exclude-module "tkinter" ^
     main.py
 
 if errorlevel 1 (

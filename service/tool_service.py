@@ -10,6 +10,12 @@ import json
 from config import supported_dev_types, getinfo_path
 import html
 
+# 获取项目根目录和adb路径
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ADB_PATH = os.path.join(PROJECT_ROOT, 'adb.exe')
+# 确保adb路径使用正斜杠
+ADB_PATH = ADB_PATH.replace('\\', '/')
+
 class ToolService:
     """工具服务类，负责与外部工具交互"""
 
@@ -71,6 +77,35 @@ class ToolService:
                     except Exception as e:
                         print(f"获取设备 {device_id} 详细信息时出错: {str(e)}")
                     
+                    # 尝试获取OTA版本和主版本
+                    ota_version = "N/A"
+                    main_version = "N/A"
+                    
+                    try:
+                        # 支持ADB功能的设备类型：H6、H8、H4K、B6L、B8L、A4L、A5L、A6L
+                        supported_adb_types = ['H6', 'H8', 'H4K', 'B6L', 'B8L', 'A4L', 'A5L', 'A6L']
+                        device_type = device_id.split('-')[0] if '-' in device_id else device_id
+                        
+                        # 获取OTA版本
+                        ssh_cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" "getprop ro.build.version"'
+                        stdout, stderr, returncode = ToolService.run_command(ssh_cmd)
+                        if stdout and not stderr:
+                            ota_version = stdout.strip()
+                        
+                        # 获取播放器版本
+                        ssh_cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" "dumpsys package cn.huidu.lcd.player | grep versionName"'
+                        stdout, stderr, returncode = ToolService.run_command(ssh_cmd)
+                        if stdout and not stderr:
+                            lines = stdout.strip().split('\n')
+                            for line in lines:
+                                if 'versionName' in line:
+                                    parts = line.split('=', 1)
+                                    if len(parts) > 1:
+                                        main_version = parts[1].strip()
+                                        break
+                    except Exception as e:
+                        print(f"获取设备 {device_id} 版本信息时出错: {str(e)}")
+                    
                     # 将所有设备信息存储为字典
                     devices.append({
                         'id': device_id,
@@ -78,7 +113,9 @@ class ToolService:
                         'password': password,
                         'mac_address': mac_address,
                         'device_name': device_name,
-                        "system_type": system_type
+                        "system_type": system_type,
+                        "ota_version": ota_version,
+                        "main_version": main_version
                     })
         
         return devices
@@ -115,8 +152,38 @@ class ToolService:
                             mac_address = stdout.split(" ")[0]
                             device_name = html.unescape(stdout.split(" ")[1])
                             system_type = stdout.split(" ")[2]
+
                 except Exception as e:
                     print(f"获取设备 {device_id} 详细信息时出错: {str(e)}")
+
+                # 尝试获取OTA版本和主版本
+                ota_version = "N/A"
+                main_version = "N/A"
+                
+                try:
+
+                    
+                    # 获取OTA版本
+                    ssh_cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" "getprop ro.build.version"'
+                    stdout, stderr, returncode = ToolService.run_command(ssh_cmd)
+                    if stdout and not stderr:
+                        ota_version = stdout.strip()
+                    
+                    # 获取主版本（所有设备）
+                    ssh_cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" "dumpsys package cn.huidu.lcd.player | grep versionName"'
+                    stdout, stderr, returncode = ToolService.run_command(ssh_cmd)
+                    if stdout and not stderr:
+                        # 提取第一行"="后面的文本内容
+                        lines = stdout.strip().split('\n')
+                        for line in lines:
+                            if 'versionName' in line:
+                                # 找到第一个等号后的内容
+                                parts = line.split('=', 1)
+                                if len(parts) > 1:
+                                    main_version = parts[1].strip()
+                                    break
+                except Exception as e:
+                    print(f"获取设备 {device_id} 版本信息时出错: {str(e)}")
 
                 # 将所有设备信息存储为字典
                 device_info={
@@ -125,7 +192,9 @@ class ToolService:
                     'password': password,
                     'mac_address': mac_address,
                     'device_name': device_name,
-                    "system_type": system_type
+                    "system_type": system_type,
+                    "ota_version": ota_version,
+                    "main_version": main_version
                 }
 
         return device_info
@@ -183,10 +252,10 @@ class ToolService:
 
     def adb_shell_command(self, ip, password, command_script):
 
-        ToolService.run_command(f"adb connect {ip}:5555")
-        cmd = f"adb shell {command_script}"
+        ToolService.run_command(f"{ADB_PATH} connect {ip}:5555")
+        cmd = f"{ADB_PATH} shell {command_script}"
         stdout, stderr, returncode = ToolService.run_command(cmd)
-        ToolService.run_command(f"adb disconnect {ip}:5555")
+        ToolService.run_command(f"{ADB_PATH} disconnect {ip}:5555")
 
         return stdout.strip(), stderr.strip()
 
@@ -206,18 +275,18 @@ class ToolService:
         使用adb将文件推送到远程设备
         """
         try:
-            cmd = f'adb -s {ip} connect {ip}:5555'
+            cmd = f'{ADB_PATH} -s {ip} connect {ip}:5555'
             stdout, stderr, returncode = ToolService.run_command(cmd)
             if not stderr:
-                cmd = f"adb -s {ip} root & adb -s {ip} remount"
+                cmd = f"{ADB_PATH} -s {ip} root & {ADB_PATH} -s {ip} remount"
                 stdout, stderr, returncode = ToolService.run_command(cmd)
                 if not  stderr:
-                    cmd = f'adb -s {ip} push {local_file} {remote_file}'
+                    cmd = f'{ADB_PATH} -s {ip} push {local_file} {remote_file}'
                     stdout, stderr, returncode = ToolService.run_command(cmd)
                     if not stderr:
                         return stdout
                 else:
-                    cmd="adb disconnect"
+                    cmd=f"{ADB_PATH} disconnect"
                     ToolService.run_command(cmd)
         except Exception as e:
             print(f"Error: {str(e)}")
@@ -229,13 +298,13 @@ class ToolService:
         使用adb将文件推送到远程设备
         """
         try:
-            cmd = f'adb -s {ip} connect {ip}:5555'
+            cmd = f'{ADB_PATH} -s {ip} connect {ip}:5555'
             stdout, stderr, returncode = ToolService.run_command(cmd)
             if not stderr:
-                cmd = f"adb -s {ip} root & adb -s {ip} remount"
+                cmd = f"{ADB_PATH} -s {ip} root & {ADB_PATH} -s {ip} remount"
                 stdout, stderr, returncode = ToolService.run_command(cmd)
                 if not stderr:
-                    cmd = f'adb -s {ip} pull {local_file} {remote_file}'
+                    cmd = f'{ADB_PATH} -s {ip} pull {local_file} {remote_file}'
                     stdout, stderr, returncode = ToolService.run_command(cmd)
                     if not stderr:
                         return stdout
@@ -266,3 +335,74 @@ class ToolService:
             return stdout
         else:
             return stderr
+    
+    @staticmethod
+    def adb_screencap(ip, remote_file):
+        """
+        使用adb执行屏幕截图命令
+        
+        参数:
+        ip: 设备IP地址
+        remote_file: 远程保存路径
+        
+        返回:
+        tuple: (stdout, stderr, returncode)
+        """
+        cmd = f'{ADB_PATH} -s {ip}:5555 shell screencap -p {remote_file}'
+        return ToolService.run_command(cmd)
+    
+    @staticmethod
+    def adb_pull_file(ip, remote_file, local_file):
+        """
+        使用adb从设备拉取文件
+        
+        参数:
+        ip: 设备IP地址
+        remote_file: 远程文件路径
+        local_file: 本地保存路径
+        
+        返回:
+        tuple: (stdout, stderr, returncode)
+        """
+        cmd = f'{ADB_PATH} -s {ip}:5555 pull {remote_file} {local_file}'
+        return ToolService.run_command(cmd)
+    
+    @staticmethod
+    def adb_connect(ip):
+        """
+        使用adb连接设备
+        
+        参数:
+        ip: 设备IP地址
+        
+        返回:
+        tuple: (stdout, stderr, returncode)
+        """
+        cmd = f'{ADB_PATH} connect {ip}:5555'
+        return ToolService.run_command(cmd)
+    
+    @staticmethod
+    def adb_disconnect():
+        """
+        使用adb断开所有连接
+        
+        返回:
+        tuple: (stdout, stderr, returncode)
+        """
+        cmd = f'{ADB_PATH} disconnect'
+        return ToolService.run_command(cmd)
+    
+    @staticmethod
+    def adb_rm_file(ip, remote_file):
+        """
+        使用adb删除设备上的文件
+        
+        参数:
+        ip: 设备IP地址
+        remote_file: 远程文件路径
+        
+        返回:
+        tuple: (stdout, stderr, returncode)
+        """
+        cmd = f'{ADB_PATH} -s {ip}:5555 shell rm {remote_file}'
+        return ToolService.run_command(cmd)

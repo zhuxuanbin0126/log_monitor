@@ -21,13 +21,6 @@ def get_data_files():
         if os.path.exists(config_file):
             data_files.append(config_file)
     
-    # 添加日志目录结构（空目录）
-    aging_test_dirs = [
-        'A-B-C-D-H_AgingTest', 'A4L_AgingTest', 'A5L_AgingTest', 'A6L_AgingTest',
-        'C08L_AgingTest', 'C16H_AgingTest', 'C16L_AgingTest', 'C16_AgingTest',
-        'D16_AgingTest', 'H6_AgingTest', 'H8_AgingTest'
-    ]
-    
     return data_files
 
 setup(

@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, 
-    QTableWidgetItem, QGroupBox, QCheckBox, QMenu, QAction, QHeaderView
+    QTableWidgetItem, QGroupBox, QCheckBox, QMenu, QAction, QHeaderView, QLabel
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
@@ -27,6 +27,31 @@ class DeviceListView(QWidget):
         # 创建设备表格
         self.create_device_table(device_list_layout)
         
+        # 列显示控制
+        column_control_layout = QHBoxLayout()
+        column_control_layout.addWidget(QLabel("列显示:"))
+        
+        # 可选显示列的按钮
+        self.column_checkboxes = {}
+        optional_columns = [
+            (3, "主版本"),
+            (4, "OTA版本"),
+            (5, "MAC地址"),
+            (6, "设备密码"),
+            (7, "设备名称"),
+            (8, "系统类型")
+        ]
+        
+        for col_index, col_name in optional_columns:
+            checkbox = QCheckBox(col_name)
+            checkbox.setChecked(col_index in [3, 4])  # 默认显示主版本和OTA版本
+            checkbox.stateChanged.connect(lambda state, idx=col_index: self.toggle_column_visibility(idx, state))
+            self.column_checkboxes[col_index] = checkbox
+            column_control_layout.addWidget(checkbox)
+        
+        column_control_layout.addStretch()
+        device_list_layout.addLayout(column_control_layout)
+        
         # 全选/取消全选
         select_layout = QHBoxLayout()
         self.select_all_check = QCheckBox("全选")
@@ -43,7 +68,7 @@ class DeviceListView(QWidget):
         
     def create_device_table(self, parent_layout):
         """创建设备表格"""
-        col_list = ["选择", "设备ID", "IP地址", "MAC地址", "设备密码", "设备名称", "系统类型"]
+        col_list = ["选择", "设备ID", "IP地址", "主版本", "OTA版本", "MAC地址", "设备密码", "设备名称", "系统类型"]
         self.device_table = QTableWidget()
         self.device_table.setColumnCount(len(col_list))
         self.device_table.setHorizontalHeaderLabels(col_list)
@@ -81,6 +106,9 @@ class DeviceListView(QWidget):
         
         parent_layout.addWidget(self.device_table)
         
+        # 设置默认显示列
+        self.set_default_column_visibility()
+        
     def update_device_table(self, devices):
         """更新设备列表表格"""
         self.devices = list(devices)
@@ -105,25 +133,37 @@ class DeviceListView(QWidget):
             ip_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.device_table.setItem(row, 2, ip_item)
             
+            # 主版本
+            main_version = device_info.get('main_version', 'N/A')
+            main_version_item = QTableWidgetItem(main_version)
+            main_version_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.device_table.setItem(row, 3, main_version_item)
+            
+            # OTA版本
+            ota_version = device_info.get('ota_version', 'N/A')
+            ota_version_item = QTableWidgetItem(ota_version)
+            ota_version_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.device_table.setItem(row, 4, ota_version_item)
+            
             # MAC地址
             mac_item = QTableWidgetItem(device_info['mac_address'])
             mac_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 3, mac_item)
+            self.device_table.setItem(row, 5, mac_item)
             
             # 设备密码
             password_item = QTableWidgetItem(device_info['password'])
             password_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 4, password_item)
+            self.device_table.setItem(row, 6, password_item)
             
             # 设备名称
             name_item = QTableWidgetItem(device_info['device_name'])
             name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 5, name_item)
+            self.device_table.setItem(row, 7, name_item)
 
             # 系统类型
             system_type_item = QTableWidgetItem(device_info['system_type'])
             system_type_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 6, system_type_item)
+            self.device_table.setItem(row, 8, system_type_item)
         
         # 保留手动设置的列宽，不自动调整
         # 确保选项列保持较小宽度
@@ -147,7 +187,9 @@ class DeviceListView(QWidget):
                 self.selected_devices.discard(device_id)
                 for info in self.devices:
                     if info['id'] == device_id:
-                        self.selected_devices_info.remove(info)
+                        # 检查设备信息是否在列表中，避免ValueError
+                        if info in self.selected_devices_info:
+                            self.selected_devices_info.remove(info)
                 # self.selected_devices_info.remove(dict(info for info in self.devices if info['id'] == device_id))
             
             # 发出选中设备变化的信号
@@ -252,7 +294,12 @@ class DeviceListView(QWidget):
 
     def get_selected_devices_info(self):
         """获取选中的设备列表信息"""
-        return self.selected_devices_info
+        # 每次调用时从当前设备列表中重新构建选中的设备信息
+        selected_info = []
+        for device_info in self.devices:
+            if device_info['id'] in self.selected_devices:
+                selected_info.append(device_info)
+        return selected_info
         
     def get_devices(self):
         """获取所有设备列表"""
@@ -262,3 +309,34 @@ class DeviceListView(QWidget):
         """设置选中的设备"""
         self.selected_devices = set(device_ids)
         self.update_device_table(self.devices)  # 更新表格以反映选择状态
+        
+    def set_default_column_visibility(self):
+        """设置默认列的显示和隐藏"""
+        # 必显示列：选择，设备ID，IP地址
+        # 默认显示列：主版本，OTA版本
+        # 默认隐藏列：MAC地址，设备密码，设备名称，系统类型
+        
+        # 显示列：0(选择), 1(设备ID), 2(IP地址), 3(主版本), 4(OTA版本)
+        visible_columns = [0, 1, 2, 3, 4]
+        
+        # 隐藏列：5(MAC地址), 6(设备密码), 7(设备名称), 8(系统类型)
+        hidden_columns = [5, 6, 7, 8]
+        
+        # 设置列的显示状态
+        for col in range(self.device_table.columnCount()):
+            if col in visible_columns:
+                self.device_table.setColumnHidden(col, False)
+            else:
+                self.device_table.setColumnHidden(col, True)
+                
+    def toggle_column_visibility(self, column_index, state):
+        """切换列的显示状态"""
+        # 必显示列不能隐藏
+        if column_index in [0, 1, 2]:
+            return
+        
+        # 根据状态显示或隐藏列
+        if state == Qt.Checked:
+            self.device_table.setColumnHidden(column_index, False)
+        else:
+            self.device_table.setColumnHidden(column_index, True)

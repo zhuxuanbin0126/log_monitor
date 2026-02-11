@@ -6,14 +6,27 @@ import json
 from datetime import datetime
 from config import device_data_file, error_log_file
 
+# 定义统一的输出目录结构
+OUTPUT_BASE_DIR = "./output"
+LOGS_DIR = os.path.join(OUTPUT_BASE_DIR, "logs")
+DATA_DIR = os.path.join(OUTPUT_BASE_DIR, "data")
+SCREENSHOT_DIR = os.path.join(OUTPUT_BASE_DIR, "screenshot")
+SWITCH_LOG_DIR = os.path.join(OUTPUT_BASE_DIR, "switch_log")
+EXCEL_DIR = os.path.join(OUTPUT_BASE_DIR, "excel")
+
 class FileService:
     """文件服务类，负责文件读写和日志记录"""
     
     @staticmethod
     def init_log_files(base_dir):
         """初始化所有日志文件"""
-        # 确保基础目录存在
-        os.makedirs(base_dir, exist_ok=True)
+        # 确保所有目录存在
+        os.makedirs(OUTPUT_BASE_DIR, exist_ok=True)
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        os.makedirs(DATA_DIR, exist_ok=True)
+        os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+        os.makedirs(SWITCH_LOG_DIR, exist_ok=True)
+        os.makedirs(EXCEL_DIR, exist_ok=True)
         
         # 初始化设备监控数据文件所在目录
         with open(device_data_file, 'w') as f:
@@ -24,19 +37,19 @@ class FileService:
             f.write("")
         
         # 初始化运行时间日志文件
-        with open(f'{base_dir}/uptime.log', 'w', encoding='utf-8') as f:
+        with open(f'{LOGS_DIR}/{os.path.basename(base_dir)}_uptime.log', 'w', encoding='utf-8') as f:
             f.write("")
         
         # 初始化设备时间日志文件
-        with open(f'{base_dir}/cardtime.log', 'w', encoding='utf-8') as f:
+        with open(f'{LOGS_DIR}/{os.path.basename(base_dir)}_cardtime.log', 'w', encoding='utf-8') as f:
             f.write("")
         
         # 初始化启动次数日志文件
-        with open(f'{base_dir}/startcount.log', 'w', encoding='utf-8') as f:
+        with open(f'{LOGS_DIR}/{os.path.basename(base_dir)}_startcount.log', 'w', encoding='utf-8') as f:
             f.write("")
         
         # 初始化综合日志文件
-        with open(f'{base_dir}/comprehensive.log', 'w', encoding='utf-8') as f:
+        with open(f'{LOGS_DIR}/{os.path.basename(base_dir)}_comprehensive.log', 'w', encoding='utf-8') as f:
             f.write("")
     
     @staticmethod
@@ -44,8 +57,8 @@ class FileService:
         """
         输出一份综合的日志
         """
-        # 确保基础目录存在
-        os.makedirs(base_dir, exist_ok=True)
+        # 确保所有目录存在
+        os.makedirs(LOGS_DIR, exist_ok=True)
         
         # 获取当前系统时间
         os_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -54,7 +67,7 @@ class FileService:
         log_entry = f"{os_time},{device_id},{ip},{password},{formatted_uptime},{formatted_remote_time},{time_diff}s,{start_count}\n"
         
         # 写入综合日志文件
-        with open(f'{base_dir}/comprehensive.log', 'a', encoding='utf-8') as f:
+        with open(f'{LOGS_DIR}/{os.path.basename(base_dir)}_comprehensive.log', 'a', encoding='utf-8') as f:
             f.write(log_entry)
     
     @staticmethod

@@ -101,8 +101,7 @@ class DeviceMonitorService:
                 stdout = ToolService.adb_pull_file(ip, password, f"{path}/network_counter.csv", f"./switch_log/{device_id}/network_counter.csv")
                 time.sleep(1)
                 stdout = ToolService.adb_pull_file(ip, password, f"{path}/swich_counter.csv", f"./switch_log/{device_id}/swich_counter.csv")
-                cmd="adb disconnect"
-                ToolService.run_command(cmd)
+                ToolService.adb_disconnect()
             elif "Linux" in system_type:
                 stdout = ToolService.pscp_pull_file(ip, password, f"{path}/network_counter.csv", f"./switch_log/{device_id}/network_counter.csv")
                 stdout = ToolService.pscp_pull_file(ip, password, f"{path}/swich_counter.csv", f"./switch_log/{device_id}/swich_counter.csv")
@@ -281,7 +280,13 @@ class DeviceMonitorService:
         formatted_uptime = uptime_info.get('formatted_uptime', 'N/A')
         current_time = uptime_info.get('current_time', 'N/A')
         uptime_log_entry = f"{device_id},{ip},{current_time},{formatted_uptime}\n"
-        with open(f'{self.base_dir}/uptime.log', 'a', encoding='utf-8') as f:
+        
+        # 确保日志目录存在
+        logs_dir = "./output/logs"
+        os.makedirs(logs_dir, exist_ok=True)
+        
+        # 写入日志文件
+        with open(f'{logs_dir}/{os.path.basename(self.base_dir)}_uptime.log', 'a', encoding='utf-8') as f:
             f.write(uptime_log_entry)
 
         if 'boot_time' in uptime_info:
@@ -334,7 +339,13 @@ class DeviceMonitorService:
                     time_log_entry = f"{device_id},{ip},{formatted_remote_time},{time_diff}s\n"
             else:
                 time_log_entry = f"{device_id},{ip},{formatted_remote_time},{time_diff}s\n"
-            with open(f'{self.base_dir}/cardtime.log', 'a', encoding='utf-8') as f:
+            
+            # 确保日志目录存在
+            logs_dir = "./output/logs"
+            os.makedirs(logs_dir, exist_ok=True)
+            
+            # 写入日志文件
+            with open(f'{logs_dir}/{os.path.basename(self.base_dir)}_cardtime.log', 'a', encoding='utf-8') as f:
                 f.write(time_log_entry)
             
             if time_diff != "N/A":
@@ -345,50 +356,70 @@ class DeviceMonitorService:
                     if 'initial_time_diff' not in self.device_data[device_id]:
                         # 第一次获取，保存为初始值，不进行验证
                         self.device_data[device_id]['initial_card_time'] = adjusted_remote_time
+                        self.device_data[device_id]['last_card_time'] = adjusted_remote_time
                         self.device_data[device_id]['initial_time_diff'] = time_diff_value
                         self.device_data[device_id]['last_time_diff'] = time_diff_value
+                        # 保存初始时间戳，用于计算运行天数
+                        self.device_data[device_id]['initial_timestamp'] = datetime.now().timestamp()
                     else:
                         # 非第一次获取，与初始值比较
                         initial_time_diff = self.device_data[device_id]['last_time_diff']
-                        # 计算与初始时间差的差异
-                        diff_from_initial = abs(time_diff_value - initial_time_diff)
-                        # 日均时差计算（总时间差/运行时长（天））
-                        if 'uptime_delta' in uptime_info:
-                            try:
-                                # 从字符串形式的 uptime_delta 解析出天数
-                                days_part = re.search(r'(\d+) days?', uptime_info['uptime_delta'])
-                                days_passed = int(days_part.group(1)) if days_part else 1  # 没有天数部分时设为1
-                                if days_passed == 0:
-                                    # 如果没有天数部分，尝试从秒数计算天数
-                                    seconds_part = re.search(r'(\d+) days?,? (\d+):(\d+):(\d+)', uptime_info['uptime_delta'])
-                                    if not seconds_part:
-                                        # 处理只有时间部分的情况
-                                        seconds_part = re.search(r'(\d+):(\d+):(\d+)', uptime_info['uptime_delta'])
-                                    if seconds_part:
-                                        hours = int(seconds_part.group(1 if len(seconds_part.groups()) == 4 else 0))
-                                        minutes = int(seconds_part.group(2 if len(seconds_part.groups()) == 4 else 1))
-                                        seconds = int(seconds_part.group(3 if len(seconds_part.groups()) == 4 else 2))
-                                        total_seconds = hours * 3600 + minutes * 60 + seconds
-                                        days_passed = total_seconds / (24 * 3600)  # 使用除法保留小数
-                            except Exception:
-                                days_passed = 1 # 设置一个极小值避免除零错误
-                            
-                            if days_passed > 0:
-                                avg_daily_diff = diff_from_initial / days_passed
-                                if abs(avg_daily_diff) > daily_time_diff_threshold:
-                                    errors.append({
-                                        'type': '设备时间日均误差',
-                                        'process': f'初始时间差: {initial_time_diff}秒, 当前时间差: {time_diff_value}秒',
-                                        'difference': f'日均{avg_daily_diff:.2f}秒'
-                                    })
-                                    # 更新初始时间差为当前值
-                                    self.device_data[device_id]['last_card_time'] = adjusted_remote_time
-                                    self.device_data[device_id]['last_time_diff'] = time_diff_value
-                                    self.device_data[device_id]['last_card_time_change_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        # 计算从初始时间到现在的天数
+                        if 'initial_timestamp' in self.device_data[device_id]:
+                            initial_timestamp = self.device_data[device_id]['initial_timestamp']
+                            current_timestamp = datetime.now().timestamp()
+                            # 计算天数差，保留一位小数
+                            days_passed = (current_timestamp - initial_timestamp) / (24 * 3600)
+                            # 确保至少为1天
+                            days_passed = max(1, round(days_passed, 1))
+                        else:
+                            # 如果没有初始时间戳，使用运行时长
+                            days_passed = 1
+                            if 'uptime_delta' in uptime_info:
+                                try:
+                                    # 从字符串形式的 uptime_delta 解析出天数
+                                    days_part = re.search(r'(\d+) days?', uptime_info['uptime_delta'])
+                                    days_passed = int(days_part.group(1)) if days_part else 1  # 没有天数部分时设为1
+                                    if days_passed == 0:
+                                        # 如果没有天数部分，尝试从秒数计算天数
+                                        seconds_part = re.search(r'(\d+) days?,? (\d+):(\d+):(\d+)', uptime_info['uptime_delta'])
+                                        if not seconds_part:
+                                            # 处理只有时间部分的情况
+                                            seconds_part = re.search(r'(\d+):(\d+):(\d+)', uptime_info['uptime_delta'])
+                                        if seconds_part:
+                                            hours = int(seconds_part.group(1 if len(seconds_part.groups()) == 4 else 0))
+                                            minutes = int(seconds_part.group(2 if len(seconds_part.groups()) == 4 else 1))
+                                            seconds = int(seconds_part.group(3 if len(seconds_part.groups()) == 4 else 2))
+                                            total_seconds = hours * 3600 + minutes * 60 + seconds
+                                            days_passed = total_seconds / (24 * 3600)  # 使用除法保留小数
+                                            # 确保至少为1天
+                                            days_passed = max(1, round(days_passed, 1))
+                                except Exception:
+                                    days_passed = 1 # 设置为1天避免除零错误
+                        
+                        # 计算日均偏差
+                        daily_deviation = abs(time_diff_value - initial_time_diff) / days_passed
+                        
+                        # 每次都更新设备时间，确保Excel中写入最新的时间
+                        self.device_data[device_id]['last_card_time'] = adjusted_remote_time
+                        self.device_data[device_id]['last_time_diff'] = time_diff_value
+                        
+                        # 只关注日均偏差是否大于±3s
+                        if daily_deviation > 3:
+                            errors.append({
+                                'type': '时间偏差异常',
+                                'process': f'初始时间差: {initial_time_diff}s, 当前时间差: {time_diff_value}s, 天数: {days_passed}天',
+                                'difference': f'日均偏差: {daily_deviation:.2f}s > 3s'
+                            })
+                            # 记录时间变化
+                            self.device_data[device_id]['last_card_time_change_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 else:
                     # 第一次获取设备信息，初始化设备数据并保存初始时间差
                     self.device_data[device_id] = {
-                        'initial_time_diff': time_diff_value
+                        'initial_time_diff': time_diff_value,
+                        'last_time_diff': time_diff_value,
+                        'initial_timestamp': datetime.now().timestamp()
                     }
         
         # 3. 检查启动次数（启动次数一致性验证）
@@ -397,7 +428,13 @@ class DeviceMonitorService:
             
             # 写入启动次数日志
             start_count_log_entry = f"{device_id},{ip},{start_count}\n"
-            with open(f'{self.base_dir}/startcount.log', 'a', encoding='utf-8') as f:
+            
+            # 确保日志目录存在
+            logs_dir = "./output/logs"
+            os.makedirs(logs_dir, exist_ok=True)
+            
+            # 写入日志文件
+            with open(f'{logs_dir}/{os.path.basename(self.base_dir)}_startcount.log', 'a', encoding='utf-8') as f:
                 f.write(start_count_log_entry)
 
             # 尝试将启动次数转换为整数
@@ -494,6 +531,93 @@ class DeviceMonitorService:
         
         return errors
     
+    def capture_screenshot(self, device_id, ip, password, system_type, screenshot_path="./screenshot"):
+        """
+        捕获设备屏幕截图
+        
+        参数:
+        device_id: 设备ID
+        ip: 设备IP地址
+        password: 设备密码
+        system_type: 设备系统类型
+        screenshot_path: 截图存储路径，默认值为"./screenshot"
+        
+        返回:
+        str: 截图保存路径，失败返回错误信息
+        """
+        # 确保截图存储目录存在
+        os.makedirs(screenshot_path, exist_ok=True)
+        # 检查设备类型是否支持截图
+        supported_device_types = ['H6', 'H8', 'H4K', 'B6L', 'B8L', 'A3L', 'A4L', 'A5L', 'A6L','C16H']
+        device_type = device_id.split('-')[0] if '-' in device_id else device_id
+        
+        if device_type not in supported_device_types:
+            return f"设备 {device_id} 不支持通过adb截图"
+        
+        if "Android" not in system_type:
+            return f"设备 {device_id} 不支持通过adb截图"
+        
+        try:
+            # 创建截图保存目录
+            screenshot_dir = screenshot_path
+            device_dir = f"{screenshot_dir}/{device_id}"
+            os.makedirs(device_dir, exist_ok=True)
+            
+            # 生成截图文件名
+            timestamp = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
+            screenshot_file = f"{device_dir}/{device_id}_{timestamp}.jpg"
+            remote_file = "/sdcard/screenshot.png"
+            
+            # 连接设备
+            stdout, stderr, returncode = ToolService.adb_connect(ip)
+            if returncode != 0:
+                return f"连接设备失败: {stderr}"
+            
+            # 执行截图
+            stdout, stderr, returncode = ToolService.adb_screencap(ip, remote_file)
+            if returncode != 0:
+                # 检查是否是设备未授权错误
+                if "device unauthorized" in stderr:
+                    # 使用SSH执行命令来重新启动ADB服务
+                    try:
+                        # 执行命令开启设备授权
+                        ToolService.ssh_execute_command(ip, password, "setprop service.adb.tcp.port 5555", ".")
+                        ToolService.ssh_execute_command(ip, password, "stop adbd", ".")
+                        ToolService.ssh_execute_command(ip, password, "start adbd", ".")
+                        # 等待ADB服务启动
+                        time.sleep(3)
+                        # 重新连接设备
+                        ToolService.adb_disconnect()
+                        time.sleep(1)
+                        stdout, stderr, returncode = ToolService.adb_connect(ip)
+                        if returncode != 0:
+                            return f"重新连接设备失败: {stderr}"
+                        # 再次尝试执行截图
+                        stdout, stderr, returncode = ToolService.adb_screencap(ip, remote_file)
+                        if returncode != 0:
+                            return f"执行截图命令失败: {stderr}"
+                    except Exception as e:
+                        return f"处理设备授权失败: {str(e)}"
+                else:
+                    return f"执行截图命令失败: {stderr}"
+            
+            # 拉取截图文件
+            stdout, stderr, returncode = ToolService.adb_pull_file(ip, remote_file, screenshot_file)
+            if returncode != 0:
+                return f"拉取截图文件失败: {stderr}"
+            
+            # 删除设备上的临时文件
+            ToolService.adb_rm_file(ip, remote_file)
+            
+            # 断开连接
+            ToolService.adb_disconnect()
+
+            # 统一使用正斜杠
+            screenshot_file = screenshot_file.replace('\\', '/')
+            return screenshot_file
+        except Exception as e:
+            return f"截图失败: {str(e)}"
+    
     def monitor_devices(self, delay_time=60):
         """
         监控所有设备
@@ -566,5 +690,3 @@ class DeviceMonitorService:
             ok_ids_file = f"{self.base_dir}/{self.dev_type}_{datetime.now().strftime('%Y%m%d')}.log"
             if os.path.exists(ok_ids_file):
                 os.remove(ok_ids_file)
-# 导入os模块
-import os

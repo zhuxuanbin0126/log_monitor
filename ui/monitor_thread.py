@@ -10,7 +10,7 @@ class MonitorThread(QThread):
     error_signal = pyqtSignal(str, str, str)  # 修改为包含device_id和ip参数
     monitor_result_signal = pyqtSignal(dict)
     
-    def __init__(self, dev_type, delay_time, selected_devices, monitor_time=True, monitor_boot=True, monitor_start_count=True):
+    def __init__(self, dev_type, delay_time, selected_devices, monitor_time=True, monitor_boot=True, monitor_start_count=True, capture_screenshot=False, first_time_data=None, screenshot_path="./screenshot", screenshot_failed_devices=None, time_failed_devices=None, boot_failed_devices=None, start_count_failed_devices=None):
         super().__init__()
         self.dev_type = dev_type
         self.delay_time = delay_time
@@ -18,6 +18,13 @@ class MonitorThread(QThread):
         self.monitor_boot = monitor_boot
         self.selected_devices = selected_devices
         self.monitor_start_count = monitor_start_count
+        self.capture_screenshot = capture_screenshot
+        self.first_time_data = first_time_data or {}
+        self.screenshot_path = screenshot_path
+        self.screenshot_failed_devices = screenshot_failed_devices or []
+        self.time_failed_devices = time_failed_devices or []
+        self.boot_failed_devices = boot_failed_devices or []
+        self.start_count_failed_devices = start_count_failed_devices or []
         self.running = False
         self.monitor_service = None
     
@@ -25,6 +32,15 @@ class MonitorThread(QThread):
         try:
             self.running = True
             self.monitor_service = DeviceMonitorService(self.dev_type)
+            
+            # 设置第一次获取的数据作为基准数据
+            if self.first_time_data:
+                for device_id, data in self.first_time_data.items():
+                    if device_id not in self.monitor_service.device_data:
+                        self.monitor_service.device_data[device_id] = {}
+                    # 更新设备数据，确保包含基准数据
+                    self.monitor_service.device_data[device_id].update(data)
+            
             self.status_signal.emit(f"开始监控 {self.dev_type} 类型设备")
             
             while self.running:
@@ -59,16 +75,40 @@ class MonitorThread(QThread):
                                        'initial_card_time' not in self.monitor_service.device_data.get(device_id, {}) and \
                                        'initial_start_count' not in self.monitor_service.device_data.get(device_id, {}))
                         
+                        # 根据设备是否在失败列表中来决定是否启用对应的检测项
+                        current_monitor_time = self.monitor_time and device_id not in self.time_failed_devices
+                        current_monitor_boot = self.monitor_boot and device_id not in self.boot_failed_devices
+                        current_monitor_start_count = self.monitor_start_count and device_id not in self.start_count_failed_devices
+                        
                         # 检查设备状态，传递监控选项
                         errors = self.monitor_service.check_device_status(
                             device_id, ip, password, 
-                            monitor_time=self.monitor_time, 
-                            monitor_boot=self.monitor_boot, 
-                            monitor_start_count=self.monitor_start_count
+                            monitor_time=current_monitor_time, 
+                            monitor_boot=current_monitor_boot, 
+                            monitor_start_count=current_monitor_start_count
                         )
                         
+                        # 如果需要截图且设备状态正常，执行截图操作
+                        if self.capture_screenshot and not errors and device_id not in self.screenshot_failed_devices:
+                            try:
+                                # 获取设备系统类型
+                                # 这里简化处理，假设为Android系统
+                                system_type = "Android"
+                                
+                                # 执行截图
+                                screenshot_result = self.monitor_service.capture_screenshot(
+                                    device_id, ip, password, system_type, self.screenshot_path
+                                )
+                                
+                                # 发送截图结果信号
+                                if screenshot_result and not screenshot_result.startswith("设备"):
+                                    self.update_signal.emit(f"设备 {device_id} ({ip}) 截图成功，保存路径: {screenshot_result}")
+                                else:
+                                    self.update_signal.emit(f"设备 {device_id} ({ip}) 截图失败: {screenshot_result}")
+                            except Exception as e:
+                                self.error_signal.emit(f"设备 {device_id} ({ip}) 截图时出错: {str(e)}", device_id, ip)
+                        
                         if errors:
-                            has_new_errors = True
                             # 以check_device_status的errors = []的拼接结果格式输出
                             error_msg = f"设备 {device_id} ({ip}) 发现错误:\n"
                             for error in errors:
@@ -91,7 +131,7 @@ class MonitorThread(QThread):
                                 if 'initial_card_time' in device_data:
                                     first_time_msg += f"- 设备时间: {device_data['initial_card_time']}\n"
                                 if 'initial_time_diff' in device_data:
-                                    first_time_msg += f"- 时间差: {device_data['initial_time_diff']}秒\n"
+                                    first_time_msg += f"- 与电脑当前的时间差: {device_data['initial_time_diff']}秒\n"
                                 
                                 # 显示启动次数（如果有且不是特殊设备）
                                 if device_id.startswith(('C08L', 'C16L', 'D16')):
