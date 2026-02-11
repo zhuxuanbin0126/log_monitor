@@ -1009,7 +1009,10 @@ class MainWindow(BaseWindow):
             # 禁用刷新按钮
             self.control_panel.refresh_button.setDisabled(True)
             # 调用DeviceId.exe
-            stdout, stderr, _ = ToolService.run_command('DeviceId.exe')
+            from service.tool_service import TOOLS_DIR
+            import os
+            device_id_exe = os.path.join(TOOLS_DIR, 'DeviceId.exe')
+            stdout, stderr, _ = ToolService.run_command(device_id_exe)
             if stderr:
                 print(f"DeviceId.exe 错误: {stderr}")
                 return []

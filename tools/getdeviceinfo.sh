@@ -9,4 +9,4 @@ else
     system_type="Linux"
     device_System_Version=$(uname -a | awk -F " " '{print $3}')
 fi
-echo "$device_mac $device_name $system_type$device_System_Version "
+echo "$device_mac $device_name $system_type $device_System_Version "

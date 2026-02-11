@@ -10,7 +10,7 @@ def get_data_files():
     data_files = []
     
     # 添加可执行文件
-    exe_files = ['DeviceId.exe', 'bash.exe', 'grep.exe', 'plink.exe','adb.exe', 'pscp.exe', 'AdbWinUsbApi.dll', 'AdbWinApi.dll']
+    exe_files = ['DeviceId.exe', 'bash.exe', 'grep.exe', 'plink.exe','adb.exe', 'pscp.exe', 'AdbWinUsbApi.dll', 'AdbWinApi.dll','HPassWord.exe']
     for exe_file in exe_files:
         if os.path.exists(exe_file):
             data_files.append(exe_file)
@@ -27,8 +27,8 @@ setup(
     name="log_monitor",
     version=VERSION,
     description="设备监控和日志记录工具",
-    author="Your Name",
-    author_email="your.email@example.com",
+    author="xuanbin",
+    author_email="xuanbin0126@126.com",
     packages=find_packages(),
     include_package_data=True,
     package_data={

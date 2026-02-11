@@ -3,6 +3,7 @@
 
 import subprocess
 import os
+import sys
 import time
 from datetime import datetime, timedelta
 import re
@@ -10,14 +11,44 @@ import json
 from config import supported_dev_types, getinfo_path
 import html
 
-# 获取项目根目录和adb路径
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ADB_PATH = os.path.join(PROJECT_ROOT, 'adb.exe')
-# 确保adb路径使用正斜杠
-ADB_PATH = ADB_PATH.replace('\\', '/')
+# 获取项目根目录和工具路径
+def get_project_root():
+    """获取项目根目录，支持打包后的环境"""
+    if getattr(sys, 'frozen', False):
+        # 打包后的环境
+        if hasattr(sys, '_MEIPASS'):
+            return sys._MEIPASS
+        else:
+            return os.path.dirname(sys.executable)
+    else:
+        # 开发环境
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+PROJECT_ROOT = get_project_root()
+
+# 根据是否是打包环境确定工具目录
+if getattr(sys, 'frozen', False):
+    # 打包后的环境，工具文件在tools/bin目录
+    TOOLS_DIR = os.path.join(PROJECT_ROOT, 'tools', 'bin')
+else:
+    # 开发环境，工具文件在tools/bin目录
+    TOOLS_DIR = os.path.join(PROJECT_ROOT, 'tools', 'bin')
+
+ADB_PATH = os.path.join(TOOLS_DIR, 'adb.exe')
+# 确保路径使用反斜杠（Windows）
+ADB_PATH = ADB_PATH.replace('/', '\\')
+TOOLS_DIR = TOOLS_DIR.replace('/', '\\')
 
 class ToolService:
     """工具服务类，负责与外部工具交互"""
+
+    @staticmethod
+    def get_tool_path(tool_name):
+        """
+        获取工具的完整路径，确保使用反斜杠格式（Windows）
+        """
+        path = os.path.join(TOOLS_DIR, tool_name)
+        return path.replace('/', '\\')
 
     @staticmethod
     def run_command(cmd, encoding='utf-8'):
@@ -39,7 +70,8 @@ class ToolService:
         pattern = dev_type.replace('-', '|')
         
         # 调用DeviceId.exe
-        stdout, stderr, returncode = ToolService.run_command('DeviceId.exe')
+        device_id_exe = ToolService.get_tool_path('DeviceId.exe')
+        stdout, stderr, returncode = ToolService.run_command(device_id_exe)
         if stderr:
             print(f"DeviceId.exe 错误: {stderr}")
             return []
@@ -56,23 +88,30 @@ class ToolService:
                     device_id = parts[0]
                     ip = parts[1]
                     password = ToolService.get_password(device_id)
-                    # 初始设置为未知
-                    mac_address = "未知"
-                    device_name = "未知"
-                    system_type = "未知"
+                    # 初始设置为N/A
+                    mac_address = "N/A"
+                    device_name = "N/A"
+                    system_type = "N/A"
                     
                     # 尝试获取MAC地址和设备名称
                     try:
                         # 初始化连接
                         stdout, stderr, _=ToolService.initialize_connection(ip, password)
+                        print(f"初始化连接 {device_id} - stderr: {stderr}")
                         if not stderr:
-                            cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {getinfo_path}'
+                            plink_exe = ToolService.get_tool_path('plink.exe')
+                            # 将路径转换为反斜杠格式
+                            getinfo_path_fixed = getinfo_path.replace('/', '\\')
+                            cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {getinfo_path_fixed}'
                             stdout, stderr, returncode = ToolService.run_command(cmd)
-                            print(f"getdeviceinfo {device_id} {stdout}")
+                            print(f"getdeviceinfo {device_id} - stdout: {stdout}, stderr: {stderr}, returncode: {returncode}")
                             if stdout and not stderr:
+                                print(stdout)
                                 mac_address = stdout.split(" ")[0]
                                 device_name = html.unescape(stdout.split(" ")[1])
                                 system_type = stdout.split(" ")[2]
+                            else:
+                                print(f"获取设备信息失败 - stdout: {stdout}, stderr: {stderr}")
 
                     except Exception as e:
                         print(f"获取设备 {device_id} 详细信息时出错: {str(e)}")
@@ -82,18 +121,17 @@ class ToolService:
                     main_version = "N/A"
                     
                     try:
-                        # 支持ADB功能的设备类型：H6、H8、H4K、B6L、B8L、A4L、A5L、A6L
-                        supported_adb_types = ['H6', 'H8', 'H4K', 'B6L', 'B8L', 'A4L', 'A5L', 'A6L']
-                        device_type = device_id.split('-')[0] if '-' in device_id else device_id
-                        
+                        # 当前支持ADB功能的设备类型：H6、H8、H4K、B6L、B8L、A4L、A5L、A6L                   
                         # 获取OTA版本
-                        ssh_cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" "getprop ro.build.version"'
+                        plink_exe = ToolService.get_tool_path('plink.exe')
+                        ssh_cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" "getprop ro.build.version"'
                         stdout, stderr, returncode = ToolService.run_command(ssh_cmd)
                         if stdout and not stderr:
                             ota_version = stdout.strip()
                         
                         # 获取播放器版本
-                        ssh_cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" "dumpsys package cn.huidu.lcd.player | grep versionName"'
+                        plink_exe = ToolService.get_tool_path('plink.exe')
+                        ssh_cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" "dumpsys package cn.huidu.lcd.player | grep versionName"'
                         stdout, stderr, returncode = ToolService.run_command(ssh_cmd)
                         if stdout and not stderr:
                             lines = stdout.strip().split('\n')
@@ -136,16 +174,19 @@ class ToolService:
                 device_id = parts[0]
                 ip = parts[1]
                 password = ToolService.get_password(device_id)
-                # 初始设置为未知
-                mac_address = "未知"
-                device_name = "未知"
-                system_type = "未知"
+                # 初始设置为N/A
+                mac_address = "N/A"
+                device_name = "N/A"
+                system_type = "N/A"
                 # 尝试获取MAC地址和设备名称
                 try:
                     # 初始化连接
                     stdout, stderr, _ = ToolService.initialize_connection(ip, password)
                     if not stderr:
-                        cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {getinfo_path}'
+                        plink_exe = ToolService.get_tool_path('plink.exe')
+                        # 将路径转换为反斜杠格式
+                        getinfo_path_fixed = getinfo_path.replace('/', '\\')
+                        cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {getinfo_path_fixed}'
                         stdout, stderr, returncode = ToolService.run_command(cmd)
                         # print(f"getdeviceinfo {device_id} {stdout}")
                         if stdout and not stderr:
@@ -164,13 +205,15 @@ class ToolService:
 
                     
                     # 获取OTA版本
-                    ssh_cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" "getprop ro.build.version"'
+                    plink_exe = ToolService.get_tool_path('plink.exe')
+                    ssh_cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" "getprop ro.build.version"'
                     stdout, stderr, returncode = ToolService.run_command(ssh_cmd)
                     if stdout and not stderr:
                         ota_version = stdout.strip()
                     
                     # 获取主版本（所有设备）
-                    ssh_cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" "dumpsys package cn.huidu.lcd.player | grep versionName"'
+                    plink_exe = ToolService.get_tool_path('plink.exe')
+                    ssh_cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" "dumpsys package cn.huidu.lcd.player | grep versionName"'
                     stdout, stderr, returncode = ToolService.run_command(ssh_cmd)
                     if stdout and not stderr:
                         # 提取第一行"="后面的文本内容
@@ -206,7 +249,8 @@ class ToolService:
         """
         max_retries = 3
         for attempt in range(max_retries):
-            stdout, stderr, returncode = ToolService.run_command(f'HPassword.exe "{device_id}"')
+            hpassword_exe = ToolService.get_tool_path('HPassword.exe')
+            stdout, stderr, returncode = ToolService.run_command(f'{hpassword_exe} "{device_id}"')
             if stderr:
                 print(f"HPassword.exe 错误 (尝试 {attempt + 1}/{max_retries}): {stderr}")
                 if "Access denied" in stderr or "password was not accepted" in stderr:
@@ -242,7 +286,8 @@ class ToolService:
             f.write('\nexit\n')
         
         # 执行远程命令
-        cmd = f'plink -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {script_filename}'
+        plink_exe = ToolService.get_tool_path('plink.exe')
+        cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {script_filename}'
         stdout, stderr, returncode = ToolService.run_command(cmd)
         # 清理临时文件
         if os.path.exists(script_filename):
@@ -265,7 +310,8 @@ class ToolService:
         """
         首次连接时接受主机密钥
         """
-        cmd = f'echo y | plink -l root -pw "{password}" "{ip}" "exit"'
+        plink_exe = ToolService.get_tool_path('plink.exe')
+        cmd = f'echo y | {plink_exe} -l root -pw "{password}" "{ip}" "exit"'
         stdout, stderr, returncode = ToolService.run_command(cmd)
         return stdout, stderr, returncode
 
@@ -317,7 +363,8 @@ class ToolService:
         """
         使用pscp将文件推送到远程设备
         """
-        cmd = f'pscp -pw "{password}" {local_file} root@{ip}:{remote_file}'
+        pscp_exe = ToolService.get_tool_path('pscp.exe')
+        cmd = f'{pscp_exe} -pw "{password}" {local_file} root@{ip}:{remote_file}'
         stdout, stderr, returncode = ToolService.run_command(cmd)
         if not stderr:
             return stdout
@@ -329,7 +376,8 @@ class ToolService:
         """
         使用pscp将文件推送到远程设备
         """
-        cmd = f'pscp -pw "{password}" root@{ip}:{remote_file} {local_file}'
+        pscp_exe = ToolService.get_tool_path('pscp.exe')
+        cmd = f'{pscp_exe} -pw "{password}" root@{ip}:{remote_file} {local_file}'
         stdout, stderr, returncode = ToolService.run_command(cmd)
         if not stderr:
             return stdout
