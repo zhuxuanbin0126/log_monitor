@@ -1,0 +1,76 @@
+on property:sys.boot_completed=1
+    chown system system /sys/class/devfreq/ff400000.gpu/governor
+    chown system system /sys/class/devfreq/ff400000.gpu/min_freq
+    chown system system /sys/class/devfreq/ff400000.gpu/max_freq
+
+    chmod 0664 /sys/class/devfreq/ff400000.gpu/governor
+    chmod 0664 /sys/class/devfreq/ff400000.gpu/min_freq
+    chmod 0664 /sys/class/devfreq/ff400000.gpu/max_freq
+
+    write /sys/devices/system/cpu/cpufreq/policy0/interactive/target_loads 65
+
+on boot
+    chown system system /sys/class/thermal/thermal_zone0/policy
+    chown system system /sys/class/thermal/thermal_zone1/policy
+    chown system system /sys/class/thermal/thermal_zone2/policy
+
+    write /dev/cpuset/foreground/cpus 0-3
+    write /dev/cpuset/foreground/boost/cpus 0-3
+    write /dev/cpuset/background/cpus 0-2
+    write /dev/cpuset/system-background/cpus 0-2
+    write /dev/cpuset/top-app/cpus 0-3
+
+    # reduce schedul time to improve io performance
+    write /sys/kernel/debug/sched_features NO_ENERGY_AWARE
+
+on init
+    # Increased power consumption and CPU in exchange for memory
+    write /proc/sys/vm/swappiness 100
+    write /sys/block/zram0/comp_algorithm lz4
+
+    chown system system /sys/system_monitor/system_status
+    chmod 0666 /sys/system_monitor/system_status
+
+    chown system system /sys/class/devfreq/dmc/system_status
+    chmod 0666 /sys/class/devfreq/dmc/system_status
+
+    chmod 0664 /odm/huidu/usb_mode.sh
+    chmod 0664 /odm/huidu/start_app.sh
+
+    chmod 0777 /dev/cyclone4-0
+
+on early-init
+    load_persist_props
+
+on property:cts_gts.status=true
+    setprop vendor.hwc.compose_policy 2
+
+on property:vendor.boot_completed=1
+    start huidu_init
+    start huidu_device_server
+	start boot_counter
+
+service huidu_init /system/bin/sh /system/bin/huidu_init.sh
+    seclabel u:r:shell:s0
+    disabled
+    oneshot
+
+service boot_counter /system/bin/sh /system/bin/boot_counter.sh
+    class main
+    user root
+    group root
+    disabled
+    seclabel u:r:shell:s0
+    oneshot
+
+service huidu_device_server /system/bin/cn.huidu.device.service
+    seclabel u:r:shell:s0
+    disabled
+
+service gsv2011_app /system/bin/gsv2011_app
+    class core
+    seclabel u:r:system_app:s0
+
+service lt8631ux_app /system/bin/lt8631ux_app
+    class core
+    seclabel u:r:system_app:s0
