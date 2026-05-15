@@ -5,12 +5,13 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import pyqtSignal
 from config import default_dev_type, supported_dev_types
 
+
 class ControlPanel(QWidget):
     """控制面板类，负责顶部控制面板的功能"""
     # 定义信号
     refresh_clicked = pyqtSignal()
     dev_type_changed = pyqtSignal(str)
-    start_monitor_clicked = pyqtSignal(int, bool, bool, bool, bool, bool, str)
+    start_monitor_clicked = pyqtSignal(int, bool, bool, bool, bool, str)
     stop_monitor_clicked = pyqtSignal()
     query_selected_clicked = pyqtSignal(str)
     
@@ -29,7 +30,7 @@ class ControlPanel(QWidget):
         # 第二行：监控控制
         self.create_monitor_control(control_layout)
         
-        # 第三行：查询控制
+        # 第三行和第四行：查询/控制（两排按钮）
         self.create_query_control(control_layout)
         
         control_layout.setContentsMargins(5, 5, 5, 5)
@@ -92,12 +93,6 @@ class ControlPanel(QWidget):
         self.monitor_start_count_check.setChecked(True)
         self.monitor_screenshot_check = QCheckBox("获取运行画面")
         self.monitor_screenshot_check.setChecked(True)
-        self.monitor_switch_count_check = QCheckBox("导出开关机日志")
-        self.monitor_switch_count_check.setChecked(False)
-        
-        # 添加清除历史数据选项
-        self.clear_history_check = QCheckBox("清除历史数据")
-        self.clear_history_check.setChecked(False)
         
         # 添加截图存储位置自定义按钮
         self.screenshot_path_button = QPushButton("截图存储位置")
@@ -114,19 +109,20 @@ class ControlPanel(QWidget):
         monitor_layout.addWidget(self.monitor_boot_check)
         monitor_layout.addWidget(self.monitor_start_count_check)
         monitor_layout.addWidget(self.monitor_screenshot_check)
-        monitor_layout.addWidget(self.monitor_switch_count_check)
-        monitor_layout.addWidget(self.clear_history_check)
         monitor_layout.addWidget(self.screenshot_path_button)
         monitor_layout.addStretch()
         
         parent_layout.addWidget(self.monitor_group)
         
     def create_query_control(self, parent_layout):
-        """创建查询控制区域"""
+        """创建查询控制区域 - 分为两排按钮"""
         self.query_group = QGroupBox("查询/控制")
-        query_layout = QHBoxLayout(self.query_group)
+        query_layout = QVBoxLayout(self.query_group)
         
-        self.query_all_button = QPushButton("查询所选全部")
+        # 第一排按钮
+        first_row_layout = QHBoxLayout()
+        
+        self.query_all_button = QPushButton("查询全部信息")
         self.query_all_button.clicked.connect(lambda: self.query_selected_clicked.emit("all"))
         
         self.query_time_button = QPushButton("设备时间")
@@ -138,36 +134,48 @@ class ControlPanel(QWidget):
         self.query_start_count_button = QPushButton("播放器启动次数")
         self.query_start_count_button.clicked.connect(lambda: self.query_selected_clicked.emit("start_count"))
         
-        self.query_count_init_button = QPushButton("开关机初始化")
-        self.query_count_init_button.clicked.connect(lambda: self.query_selected_clicked.emit("count_init"))
-
-        self.query_sum_switch_button = QPushButton("开关机检查")
+        self.query_sum_switch_button = QPushButton("开关机次数")
         self.query_sum_switch_button.clicked.connect(lambda: self.query_selected_clicked.emit("sum_switch"))
-
-        self.query_clean_switch_button = QPushButton("清除开关机日志")
-        self.query_clean_switch_button.clicked.connect(lambda: self.query_selected_clicked.emit("clean_switch"))
-
-        self.query_set_time_button = QPushButton("设备校时")
-        self.query_set_time_button.clicked.connect(lambda: self.query_selected_clicked.emit("check_time"))
-
-        self.query_upgrade_program_button = QPushButton("更新节目")
-        self.query_upgrade_program_button.clicked.connect(lambda: self.query_selected_clicked.emit("upgrade_program"))
         
-        # 添加截图按钮
+        first_row_layout.addWidget(self.query_all_button)
+        first_row_layout.addWidget(self.query_time_button)
+        first_row_layout.addWidget(self.query_boot_button)
+        first_row_layout.addWidget(self.query_start_count_button)
+        first_row_layout.addWidget(self.query_sum_switch_button)
+        first_row_layout.addStretch()
+        
+        query_layout.addLayout(first_row_layout)
+        
+        # 第二排按钮
+        second_row_layout = QHBoxLayout()
+        
+        self.query_set_time_button = QPushButton("校时")
+        self.query_set_time_button.clicked.connect(lambda: self.query_selected_clicked.emit("check_time"))
+        
         self.query_screenshot_button = QPushButton("截图")
         self.query_screenshot_button.clicked.connect(lambda: self.query_selected_clicked.emit("screenshot"))
-
-        query_layout.addWidget(self.query_all_button)
-        query_layout.addWidget(self.query_time_button)
-        query_layout.addWidget(self.query_boot_button)
-        query_layout.addWidget(self.query_start_count_button)
-        query_layout.addWidget(self.query_count_init_button)
-        query_layout.addWidget(self.query_sum_switch_button)
-        query_layout.addWidget(self.query_clean_switch_button)
-        query_layout.addWidget(self.query_set_time_button)
-        query_layout.addWidget(self.query_upgrade_program_button)
-        query_layout.addWidget(self.query_screenshot_button)
-        query_layout.addStretch()
+        
+        self.query_upgrade_program_button = QPushButton("发送节目")
+        self.query_upgrade_program_button.clicked.connect(lambda: self.query_selected_clicked.emit("upgrade_program"))
+        
+        self.query_count_init_button = QPushButton("开关机初始化")
+        self.query_count_init_button.clicked.connect(lambda: self.query_selected_clicked.emit("count_init"))
+        
+        self.query_output_log_button = QPushButton("导出开关机日志")
+        self.query_output_log_button.clicked.connect(lambda: self.query_selected_clicked.emit("output_log"))
+        
+        self.query_clean_switch_button = QPushButton("清空开关机次数")
+        self.query_clean_switch_button.clicked.connect(lambda: self.query_selected_clicked.emit("clean_switch"))
+        
+        second_row_layout.addWidget(self.query_set_time_button)
+        second_row_layout.addWidget(self.query_screenshot_button)
+        second_row_layout.addWidget(self.query_upgrade_program_button)
+        second_row_layout.addWidget(self.query_count_init_button)
+        second_row_layout.addWidget(self.query_output_log_button)
+        second_row_layout.addWidget(self.query_clean_switch_button)
+        second_row_layout.addStretch()
+        
+        query_layout.addLayout(second_row_layout)
         
         parent_layout.addWidget(self.query_group)
         
@@ -183,11 +191,10 @@ class ControlPanel(QWidget):
         monitor_boot = self.monitor_boot_check.isChecked()
         monitor_start_count = self.monitor_start_count_check.isChecked()
         capture_screenshot = self.monitor_screenshot_check.isChecked()
-        clear_history = self.clear_history_check.isChecked()
         screenshot_path = self.screenshot_path
         
         self.start_monitor_clicked.emit(
-            delay_time, monitor_time, monitor_boot, monitor_start_count, capture_screenshot, clear_history, screenshot_path
+            delay_time, monitor_time, monitor_boot, monitor_start_count, capture_screenshot, screenshot_path
         )
         
     def validate_delay_input(self):
@@ -214,8 +221,6 @@ class ControlPanel(QWidget):
         self.monitor_boot_check.setEnabled(not is_monitoring)
         self.monitor_start_count_check.setEnabled(not is_monitoring)
         self.monitor_screenshot_check.setEnabled(not is_monitoring)
-        self.monitor_switch_count_check.setEnabled(not is_monitoring)
-        self.clear_history_check.setEnabled(not is_monitoring)
         self.screenshot_path_button.setEnabled(not is_monitoring)
         
         # 禁用/启用查询/控制区域的所有按钮
@@ -223,12 +228,13 @@ class ControlPanel(QWidget):
         self.query_time_button.setEnabled(not is_monitoring)
         self.query_boot_button.setEnabled(not is_monitoring)
         self.query_start_count_button.setEnabled(not is_monitoring)
-        self.query_count_init_button.setEnabled(not is_monitoring)
         self.query_sum_switch_button.setEnabled(not is_monitoring)
-        self.query_clean_switch_button.setEnabled(not is_monitoring)
         self.query_set_time_button.setEnabled(not is_monitoring)
-        self.query_upgrade_program_button.setEnabled(not is_monitoring)
         self.query_screenshot_button.setEnabled(not is_monitoring)
+        self.query_upgrade_program_button.setEnabled(not is_monitoring)
+        self.query_count_init_button.setEnabled(not is_monitoring)
+        self.query_output_log_button.setEnabled(not is_monitoring)
+        self.query_clean_switch_button.setEnabled(not is_monitoring)
         
     def on_screenshot_path_clicked(self):
         """截图存储位置选择按钮点击事件"""

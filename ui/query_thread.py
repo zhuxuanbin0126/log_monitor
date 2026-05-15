@@ -53,15 +53,14 @@ class QueryThread(QThread):
                     path = "/data"
                 else:
                     raise ValueError("暂不支持此系统类型")
-                switch_time, network_time = monitor_service.sum_switch_count(self.ip, self.password, self.device_id,path)
-                output_log_bool = self.control_panel.monitor_switch_count_check.isChecked()
-                if self.switch_log_file != None:
-                    self.query_count[0] += 1
-                    self.switch_log_file.write(f"{self.device_id},{switch_time},{network_time}\n")
-                if output_log_bool:
-                    output_log = monitor_service.switch_log_output(self.ip, self.password, self.device_id, self.system_type, path)
-                    results['output_log'] = output_log
-                results['sum_switch'] = f"{self.device_id} 当前开关机次数为：{switch_time} 网络开关机次数为：{network_time}"
+                switch_time, network_time, success, error_msg = monitor_service.sum_switch_count(self.ip, self.password, self.device_id, path)
+                if success:
+                    if self.switch_log_file != None:
+                        self.query_count[0] += 1
+                        self.switch_log_file.write(f"{self.device_id},{switch_time},{network_time}\n")
+                    results['sum_switch'] = f"{self.device_id} 当前开关机次数为：{switch_time} 网络开关机次数为：{network_time}"
+                else:
+                    results['sum_switch'] = error_msg
 
             if self.query_type == "clean_switch":
                 if "Linux" in self.system_type:
@@ -70,8 +69,11 @@ class QueryThread(QThread):
                     path = "/data"
                 else:
                     raise ValueError("暂不支持此系统类型")
-                output_log = monitor_service.clean_switch_log(self.ip, self.password, self.device_id, path)
-                results['clean_switch'] = f"{self.device_id} 开关机记录已清除"
+                success, error_msg = monitor_service.clean_switch_log(self.ip, self.password, self.device_id, path)
+                if success:
+                    results['clean_switch'] = f"{self.device_id} 开关机记录已清除"
+                else:
+                    results['clean_switch'] = error_msg
 
             if self.query_type == "check_time":
                 results_log = monitor_service.ntptime_checkout_time(self.ip, self.password, self.device_id, self.system_type)
@@ -84,6 +86,16 @@ class QueryThread(QThread):
             if self.query_type == "screenshot":
                 screenshot_result = monitor_service.capture_screenshot(self.device_id, self.ip, self.password, self.system_type)
                 results['screenshot'] = screenshot_result
+            
+            if self.query_type == "output_log":
+                if "Linux" in self.system_type:
+                    path = "/root/Box/project"
+                elif "Android" in self.system_type:
+                    path = "/data"
+                else:
+                    raise ValueError("暂不支持此系统类型")
+                output_success, output_log = monitor_service.switch_log_output(self.ip, self.password, self.device_id, self.system_type, path)
+                results['output_log'] = output_log
 
             self.result_signal.emit(self.device_id, results)
             self.end_signal.emit(self.query_count[0])

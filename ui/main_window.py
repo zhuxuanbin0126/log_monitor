@@ -9,10 +9,11 @@ import re
 from .base_window import BaseWindow
 from .control_panel import ControlPanel
 from .device_list_view import DeviceListView
-from .reflash_device_threadpool import GetDeviceInfoManager
+from .reflash_device_threadpool import GetDeviceInfoManager, GetDeviceListThread
 from .result_display_view import ResultDisplayView
 from .monitor_thread import MonitorThread
 from .query_thread import QueryThread
+from .serial_query_manager import SerialQueryManager
 from .reflash_device_thread import ReflashThread
 
 from service.tool_service import ToolService
@@ -35,6 +36,15 @@ class MainWindow(BaseWindow):
         self.notepad_process = None  # 用于跟踪记事本进程
         self.excel_file = None  # 用于存储当前使用的Excel文件名
         self.Manager = None
+        
+        # 启动时最大化窗口
+        self.showMaximized()
+        
+        # 查询相关的变量
+        self.successful_devices = []
+        self.failed_devices = []
+        self.current_query_type = None
+        self.getdevice_num = 0
         
         # 初始化日志文件
         base_dir = get_base_dir(self.dev_type)
@@ -208,7 +218,7 @@ class MainWindow(BaseWindow):
         # 重新刷新设备列表
         self.refresh_device_list()
     
-    def start_monitor(self, delay_time, monitor_time, monitor_boot, monitor_start_count, capture_screenshot=False, clear_history=False, screenshot_path="./screenshot"):
+    def start_monitor(self, delay_time, monitor_time, monitor_boot, monitor_start_count, capture_screenshot=False, screenshot_path="./screenshot"):
         """开始监控"""
         if len(self.device_list_view.get_devices()) == 0:
             self.log("请先刷新设备列表")
@@ -222,12 +232,6 @@ class MainWindow(BaseWindow):
         if self.monitor_thread and self.monitor_thread.isRunning():
             self.log("监控已经在运行中")
             return
-        
-        # 处理清除历史数据
-        if clear_history:
-            self.log("开始清除历史监控数据...")
-            self.clear_history_data()
-            self.log("历史监控数据清除完成")
         
         # 第一次获取设备信息，检测设备在线情况和可执行性
         self.log("开始第一次获取设备信息，检测设备在线情况...")
@@ -579,6 +583,15 @@ class MainWindow(BaseWindow):
                 thread.wait()
         self.query_threads.clear()
         
+        # 如果存在串行管理器，停止它
+        if hasattr(self, 'serial_manager') and self.serial_manager and self.serial_manager.isRunning():
+            self.serial_manager.stop()
+            self.serial_manager.wait()
+        
+        # 初始化成功和失败设备列表
+        self.successful_devices = []
+        self.failed_devices = []
+        
         # 开始新的查询 变量作为数组传入线程 数据才会改变
         self.query_count = [0]
 
@@ -589,24 +602,44 @@ class MainWindow(BaseWindow):
                 os.mkdir("./switch_log")
             self.switch_log_file = open(f"./switch_log/{time.strftime('%Y%m%d%H%M%S',time.localtime())}_switch_log.csv", "w", encoding="utf-8")
             self.switch_log_file.write("设备ID,累计开机次数,累计网络开机次数\n")
-
-        # 开始查询信息
+        
+        # 保存查询类型用于汇总
+        self.current_query_type = query_type
+        
+        # 收集要处理的设备信息
+        devices_to_process = []
         for device_info in self.device_list_view.get_devices():
             device_id = device_info['id']
-            ip = device_info['ip']
-            password = device_info.get('password', '')
-            system_type = device_info.get('system_type', '')
-            self.getdevice_num = len(selected_devices) # 查询设备的数量
             if device_id in selected_devices:
-                # 创建查询线程
-                thread = QueryThread(device_id, ip, password, query_type, self.control_panel, system_type, self.switch_log_file, self.query_count)
-                thread.result_signal.connect(self.on_query_result)
-                thread.error_signal.connect(lambda msg: self.log(msg, is_error=True))
-                thread.end_signal.connect(self.close_csv_file)
-                self.query_threads.append(thread)
-                thread.start()
+                ip = device_info['ip']
+                password = device_info.get('password', '')
+                system_type = device_info.get('system_type', '')
+                devices_to_process.append((device_id, ip, password, system_type))
         
-        self.log(f"\n-----------------------------------------------------------------------\n开始查询 {self.getdevice_num} 台设备的{self.get_query_type_text(query_type)}信息")
+        self.getdevice_num = len(devices_to_process)
+        
+        # 使用串行管理器执行
+        self.serial_manager = SerialQueryManager(
+            devices_to_process, 
+            query_type, 
+            self.control_panel, 
+            self.switch_log_file
+        )
+        self.serial_manager.result_signal.connect(self.on_query_result)
+        self.serial_manager.error_signal.connect(self.on_query_error)
+        self.serial_manager.finished_signal.connect(self.close_csv_file)
+        self.serial_manager.start()
+        
+        # 判断是查询还是操作
+        if self._is_query_operation(query_type):
+            self.log(f"\n-----------------------------------------------------------------------\n开始查询 {self.getdevice_num} 台设备的{self.get_query_type_text(query_type)}信息")
+        else:
+            self.log(f"\n-----------------------------------------------------------------------\n开始执行 {self.getdevice_num} 台设备的{self.get_query_type_text(query_type)}操作")
+    
+    def _is_query_operation(self, query_type):
+        """判断是否是查询操作"""
+        query_types = ["all", "time", "boot_time", "start_count", "sum_switch"]
+        return query_type in query_types
     
     def get_query_type_text(self, query_type):
         """获取查询类型的文本描述"""
@@ -623,21 +656,80 @@ class MainWindow(BaseWindow):
         elif query_type == "sum_switch":
             return "开关机次数"
         elif query_type == "clean_switch":
-            return "清除日志"
+            return "清空开关机次数"
         elif query_type == "check_time":
             return "校时"
         elif query_type == "upgrade_program":
-            return "更新节目"
+            return "发送节目"
+        elif query_type == "screenshot":
+            return "截图"
+        elif query_type == "output_log":
+            return "导出开关机日志"
         return "未知"
     
     def close_csv_file(self, query_count):
-        """关闭csv文件"""
+        """关闭csv文件并显示汇总"""
         if query_count == self.getdevice_num:
-            self.switch_log_file.close()
+            if self.switch_log_file:
+                self.switch_log_file.close()
+            # 显示汇总信息（监控任务的查询和截图不显示汇总）
+            if not (self.monitor_thread and self.monitor_thread.isRunning()):
+                self._show_query_summary()
+
+    def _show_query_summary(self):
+        """显示查询或操作的汇总信息"""
+        is_query = self._is_query_operation(self.current_query_type)
+        
+        if is_query:
+            # 查询操作的汇总
+            success_count = len(self.successful_devices)
+            fail_count = len(self.failed_devices)
+            
+            self.log(f"\n-----------------------------------------------------------------------")
+            self.log(f"查询汇总:")
+            self.log(f"  总设备数: {self.getdevice_num}")
+            self.log(f"  查询成功: {success_count} 台")
+            self.log(f"  查询失败: {fail_count} 台")
+            
+            if self.failed_devices:
+                self.log(f"  失败设备: {', '.join(self.failed_devices)}", is_error=True)
+        else:
+            # 执行操作的汇总
+            success_count = len(self.successful_devices)
+            fail_count = len(self.failed_devices)
+            
+            self.log(f"\n-----------------------------------------------------------------------")
+            self.log(f"操作汇总:")
+            self.log(f"  总设备数: {self.getdevice_num}")
+            self.log(f"  操作成功: {success_count} 台")
+            self.log(f"  操作失败: {fail_count} 台")
+            
+            if self.failed_devices:
+                self.log(f"  失败设备: {', '.join(self.failed_devices)}", is_error=True)
 
     def on_query_result(self, device_id, results):
         """处理查询结果"""
-        self.log(f"\n设备 {device_id} 查询结果:")
+        # 判断操作是否成功
+        success = True
+        
+        # 检查结果中是否有错误
+        for key, value in results.items():
+            if isinstance(value, dict) and 'error' in value:
+                success = False
+                break
+            # 检查字符串结果中是否有失败关键词
+            if isinstance(value, str) and ('失败' in value or '错误' in value or '无法' in value):
+                success = False
+                break
+        
+        # 记录成功或失败
+        if success:
+            self.successful_devices.append(device_id)
+        else:
+            self.failed_devices.append(device_id)
+        
+        # 显示结果
+        self.log(f"\n设备 {device_id} 操作结果:")
         
         if 'device_time' in results:
             time_info = results['device_time']
@@ -696,6 +788,11 @@ class MainWindow(BaseWindow):
 
         if "screenshot" in results:
             self.log(f"设备: {results['screenshot']}")
+    
+    def on_query_error(self, device_id, error_msg):
+        """处理查询错误"""
+        self.failed_devices.append(device_id)
+        self.log(error_msg, is_error=True)
 
 
     def on_monitor_result(self, device_data):
@@ -993,6 +1090,12 @@ class MainWindow(BaseWindow):
                 return
         
         self.stop_monitor()
+        
+        # 停止设备查找线程
+        if hasattr(self, 'find_dev_Thread') and self.find_dev_Thread and self.find_dev_Thread.isRunning():
+            self.find_dev_Thread.stop()
+            self.find_dev_Thread.wait()
+        
         # self.auto_refresh_timer.stop()  # 停止自动刷新定时器
         for thread in self.query_threads:
             if thread.isRunning():
@@ -1001,46 +1104,85 @@ class MainWindow(BaseWindow):
         event.accept()
     
     def refresh_device_list(self):
-        """刷新设备列表"""
+        """刷新设备列表 - 使用异步线程避免阻塞主线程"""
 
         try:
+            # 如果已有线程在运行，先停止
+            if hasattr(self, 'find_dev_Thread') and self.find_dev_Thread and self.find_dev_Thread.isRunning():
+                self.find_dev_Thread.stop()
+                self.find_dev_Thread.wait()
+            
             # 获取当前查询设备类型
             dev_type = self.control_panel.dev_type
             # 禁用刷新按钮
             self.control_panel.refresh_button.setDisabled(True)
-            # 调用DeviceId.exe
-            from service.tool_service import TOOLS_DIR
-            import os
-            device_id_exe = os.path.join(TOOLS_DIR, 'DeviceId.exe')
-            stdout, stderr, _ = ToolService.run_command(device_id_exe)
-            if stderr:
-                print(f"DeviceId.exe 错误: {stderr}")
-                return []
             # 初始化devices数组
             self.devices = []
-            # 配置正则表达式
+            
+            # 创建异步获取设备列表线程
+            from service.tool_service import TOOLS_DIR
+            self.find_dev_Thread = GetDeviceListThread(
+                dev_type=dev_type,
+                tools_dir=TOOLS_DIR,
+                timeout=60  # 60秒超时
+            )
+            
+            # 连接信号
+            self.find_dev_Thread.progress_signal.connect(self.on_find_device_progress)
+            self.find_dev_Thread.raw_list_signal.connect(self.on_raw_device_list_received)
+            self.find_dev_Thread.error_signal.connect(self.on_find_device_error)
+            self.find_dev_Thread.finished_signal.connect(self.on_find_device_finished)
+            
+            # 启动线程
+            self.find_dev_Thread.start()
+            
+        except Exception as e:
+            self.log(f"刷新设备列表失败: {str(e)}", is_error=True)
+            self.control_panel.refresh_button.setEnabled(True)
+            import traceback
+            print(traceback.format_exc())
+    
+    def on_find_device_progress(self, message):
+        """设备查找进度回调"""
+        self.control_panel.update_refresh_status(message)
+    
+    def on_raw_device_list_received(self, raw_lines):
+        """接收到原始设备列表后的处理"""
+        try:
+            dev_type = self.control_panel.dev_type
             pattern = dev_type.replace('-', '|')
-            # 创建GetDeviceInfoManager线程池
-            # print(f"创建任务列表：",len(stdout.split("\n")))
-            self.Manager = GetDeviceInfoManager(pattern, max_workers=4, queue_size=len(stdout.split("\n")))
+            
+            if not raw_lines:
+                self.devices = []
+                self.device_info_to_list()
+                return
+            
+            self.log(f"开始获取 {len(raw_lines)} 台设备的详细信息...")
+            
+            # 创建GetDeviceInfoManager线程池处理详细信息
+            self.Manager = GetDeviceInfoManager(pattern, max_workers=4, queue_size=len(raw_lines))
             self.Manager.taskCompleted.connect(self.refresh_device_flash)
             self.Manager.allTasksCompleted.connect(self.device_info_to_list)
+            
             # 提交任务
-            for line in stdout.split("\n"):
-                if line.strip().split("-")[0] in supported_dev_types and re.match(f"^({pattern})", line):
-                    self.Manager.submit_task(line)
-            return None
-
+            for line in raw_lines:
+                self.Manager.submit_task(line)
+                
         except Exception as e:
-            self.log(f"刷新设备列表失败: {str(e)}")
-            # 恢复刷新按钮
+            self.log(f"处理设备列表时出错: {str(e)}", is_error=True)
             self.control_panel.refresh_button.setEnabled(True)
-            # 释放线程池
-            self.Manager.check_timer.stop()
-            self.Manager.taskCompleted.disconnect()
-            self.Manager.allTasksCompleted.disconnect()
-            self.Manager = None
-            return None
+    
+    def on_find_device_error(self, error_msg):
+        """设备查找出错回调"""
+        self.log(error_msg, is_error=True)
+        self.control_panel.update_refresh_status(error_msg, is_error=True)
+        self.control_panel.refresh_button.setEnabled(True)
+    
+    def on_find_device_finished(self):
+        """设备查找线程完成回调"""
+        # 清理线程引用
+        if hasattr(self, 'find_dev_Thread'):
+            self.find_dev_Thread = None
 
     def refresh_device_flash(self, device_info):
         """执行完成后执行的操作"""

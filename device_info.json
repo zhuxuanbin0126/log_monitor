@@ -1,0 +1,162 @@
+[
+    {
+        "型号": "D16",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "不支持",
+        "主控型号": "PX30",
+        "系统版本": "Liunx",
+        "保存OTG属性": "nan",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "不支持"
+    },
+    {
+        "型号": "D36",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "不支持",
+        "主控型号": "nan",
+        "系统版本": "Liunx",
+        "保存OTG属性": "nan",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "不支持"
+    },
+    {
+        "型号": "A7",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "支持",
+        "主控型号": "RK3399",
+        "系统版本": "安卓 10",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/ff770000.syscon/ff770000.syscon:usb2-phy@e450/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "支持"
+    },
+    {
+        "型号": "A8",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "支持",
+        "主控型号": "RK3399",
+        "系统版本": "安卓 10",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/ff770000.syscon/ff770000.syscon:usb2-phy@e450/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "支持"
+    },
+    {
+        "型号": "A6L",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "支持",
+        "主控型号": "RK3566",
+        "系统版本": "安卓 11",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "支持"
+    },
+    {
+        "型号": "A5L",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "不支持",
+        "主控型号": "RK3566",
+        "系统版本": "安卓 11",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "不支持"
+    },
+    {
+        "型号": "A4L",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "不支持",
+        "主控型号": "RK3566",
+        "系统版本": "安卓 11",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "不支持"
+    },
+    {
+        "型号": "A3L",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "不支持",
+        "主控型号": "RK3328",
+        "系统版本": "安卓 11",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/ff450000.syscon/ff450000.syscon:usb2-phy@100/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "不支持"
+    },
+    {
+        "型号": "C16L",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "不支持",
+        "主控型号": "PX30",
+        "系统版本": "Liunx",
+        "保存OTG属性": "nan",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "不支持"
+    },
+    {
+        "型号": "B6L",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "不支持",
+        "主控型号": "RK3566",
+        "系统版本": "安卓 11",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "不支持"
+    },
+    {
+        "型号": "C08L",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "不支持",
+        "主控型号": "PX30",
+        "系统版本": "Liunx",
+        "保存OTG属性": "nan",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "不支持"
+    },
+    {
+        "型号": "H4K",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "支持",
+        "主控型号": "RK3568",
+        "系统版本": "安卓11",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "支持"
+    },
+    {
+        "型号": "H6",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "支持",
+        "主控型号": "RK3568",
+        "系统版本": "安卓 11",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "支持"
+    },
+    {
+        "型号": "H8",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "支持",
+        "主控型号": "RK3568",
+        "系统版本": "安卓 11",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "支持"
+    },
+    {
+        "型号": "B8L",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "支持",
+        "主控型号": "RK3568",
+        "系统版本": "安卓 11",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "支持"
+    },
+    {
+        "型号": "C16H",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "不支持",
+        "主控型号": "T507-NH",
+        "系统版本": "安卓 10",
+        "保存OTG属性": "nan",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "不支持"
+    }
+]

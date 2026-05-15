@@ -274,7 +274,7 @@ pyinstaller --onedir --windowed --add-data "*.exe;" --add-data "*.dll;" main.py
 
 ## 📝 更新日志
 
-### v1.0.2.3 (当前版本)
+### v1.0.3.0 (当前版本)
 - ✅ 设备自动发现和列表管理
 - ✅ 多维度实时监控功能
 - ✅ 智能错误处理和友好提示

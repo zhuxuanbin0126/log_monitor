@@ -1,0 +1,15 @@
+{
+  "H20-00-A5610": {
+    "timestamp": 1771923274.9198923,
+    "data": {
+      "id": "H20-00-A5610",
+      "ip": "192.168.0.64",
+      "password": "4!L*U.5@8@9y",
+      "mac_address": "N/A",
+      "device_name": "N/A",
+      "system_type": "N/A",
+      "ota_version": "N/A",
+      "main_version": "N/A"
+    }
+  }
+}

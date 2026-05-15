@@ -2,6 +2,8 @@ from PyQt5.QtCore import QThread, pyqtSignal, QObject, QRunnable, QThreadPool, Q
 from business.device_monitor_service import DeviceMonitorService
 from service.tool_service import ToolService
 import time
+import os
+from config import supported_dev_types, get_base_dir
 
 
 def run_time(func, *args):
@@ -61,19 +63,116 @@ class QRunnableWrapper(QRunnable):
         self.pattern = pattern
 
     def run(self):
+        devices = None
         try:
             """增加重试机制"""
             for i in range(3):
-                devices = ToolService.get_device_info(self.devices_info, self.pattern)
-                # print(f"查询设备 {self.devices_info} 第 {i+1} 次结果: {devices}")
-                if devices["mac_address"]  != "未知":
-                    break
-                else:
+                try:
+                    devices = ToolService.get_device_info(self.devices_info, self.pattern)
+                    # print(f"查询设备 {self.devices_info} 第 {i+1} 次结果: {devices}")
+                    if devices and devices.get("mac_address") and devices["mac_address"] != "未知":
+                        break
+                except Exception as inner_e:
+                    print(f"查询设备 {self.devices_info} 第 {i+1} 次尝试失败: {inner_e}")
+                
+                if i < 2:
                     time.sleep(0.1)
 
             # 将获取到的信息返回给主线程
-            self.completed_signal.emit(devices)
+            if devices:
+                self.completed_signal.emit(devices)
+            else:
+                self.completed_signal.emit(None)
         except Exception as e:
             # 错误处理建议
+            import traceback
             print(f"查询设备 {self.devices_info} 失败: {e}")
+            print(traceback.format_exc())
             self.completed_signal.emit(None)
+
+
+class GetDeviceListThread(QThread):
+    """异步获取设备列表的线程类，避免主线程阻塞"""
+    
+    progress_signal = pyqtSignal(str)
+    raw_list_signal = pyqtSignal(list)
+    error_signal = pyqtSignal(str)
+    finished_signal = pyqtSignal()
+    
+    def __init__(self, dev_type, tools_dir, timeout=60):
+        super().__init__()
+        self.dev_type = dev_type
+        self.tools_dir = tools_dir
+        self.timeout = timeout
+        self._should_stop = False
+    
+    def stop(self):
+        self._should_stop = True
+    
+    def run(self):
+        try:
+            self.progress_signal.emit("正在扫描设备...")
+            
+            device_id_exe = os.path.join(self.tools_dir, 'DeviceId.exe')
+            
+            self.progress_signal.emit(f"执行 DeviceId.exe (超时: {self.timeout}秒)...")
+            
+            stdout, stderr, returncode = ToolService.run_command(
+                device_id_exe, 
+                timeout=self.timeout
+            )
+            
+            if self._should_stop:
+                return
+            
+            if returncode == -2:
+                error_msg = f"DeviceId.exe 执行超时（{self.timeout}秒）"
+                self.error_signal.emit(error_msg)
+                return
+            
+            if stderr:
+                error_msg = f"DeviceId.exe 错误: {stderr}"
+                self.error_signal.emit(error_msg)
+                return
+            
+            if returncode != 0 and returncode != -2:
+                error_msg = f"DeviceId.exe 返回错误代码: {returncode}"
+                self.error_signal.emit(error_msg)
+                return
+            
+            if not stdout.strip():
+                self.progress_signal.emit("未发现设备")
+                self.raw_list_signal.emit([])
+                return
+            
+            lines = stdout.split('\n')
+            pattern = self.dev_type.replace('-', '|')
+            
+            filtered_lines = []
+            total_lines = len(lines)
+            
+            for i, line in enumerate(lines):
+                if self._should_stop:
+                    return
+                
+                line = line.strip()
+                if not line:
+                    continue
+                
+                if i % 10 == 0:
+                    self.progress_signal.emit(f"解析设备列表... ({i+1}/{total_lines})")
+                
+                if line.split("-")[0] in supported_dev_types:
+                    if __import__('re').match(f"^({pattern})", line):
+                        filtered_lines.append(line)
+            
+            self.progress_signal.emit(f"发现 {len(filtered_lines)} 台设备")
+            self.raw_list_signal.emit(filtered_lines)
+            
+        except Exception as e:
+            error_msg = f"获取设备列表时出错: {str(e)}"
+            self.error_signal.emit(error_msg)
+            import traceback
+            print(traceback.format_exc())
+        finally:
+            self.finished_signal.emit()

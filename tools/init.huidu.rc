@@ -1,20 +1,44 @@
-import /vendor/etc/init/hw/init.huidu.display.rc
+on init
+    chmod 0666 /dev/fpga_mac_dev
+    chmod 0664 /odm/huidu/usb_mode.sh
 
 on early-init
     load_persist_props
     write /sys/devices/system/cpu/cpufreq/policy0/scaling_governor performance
     write /sys/class/devfreq/dmc/governor performance
-    write /sys/devices/platform/fde60000.gpu/devfreq/fde60000.gpu/governor performance
+    exec -- /system/bin/ifconfig eth1 up
+
+on late-fs
+    # boot time fs tune
+    write /sys/block/mmcblk1/queue/iostats 0
+    write /sys/block/mmcblk1/queue/read_ahead_kb 2048
+    write /sys/block/mmcblk1/queue/nr_requests 256
+    write /sys/block/dm-0/queue/read_ahead_kb 2048
+    write /sys/block/dm-1/queue/read_ahead_kb 2048
+    write /sys/block/dm-2/queue/read_ahead_kb 2048
+    write /sys/block/dm-3/queue/read_ahead_kb 2048
+
+
+on property:sys.boot_completed=1
+    # end boot time fs tune
+    write /sys/block/mmcblk1/queue/read_ahead_kb 128
+    write /sys/block/mmcblk1/queue/nr_requests 128
+    write /sys/block/dm-0/queue/read_ahead_kb 128
+    write /sys/block/dm-1/queue/read_ahead_kb 128
+    write /sys/block/dm-2/queue/read_ahead_kb 128
+    write /sys/block/dm-3/queue/read_ahead_kb 128
+    write /sys/block/mmcblk1/queue/iostats 1
+
 
 on property:vendor.boot_completed=1
     start huidu_init
     start boot_counter
-    stop huidu_recovery
 
 service huidu_init /system/bin/sh /system/bin/huidu_init.sh
     class main
     user root
     group root
+	disabled
     seclabel u:r:shell:s0
     oneshot
 
@@ -22,15 +46,14 @@ service boot_counter /system/bin/sh /system/bin/boot_counter.sh
     class main
     user root
     group root
-    disabled
     seclabel u:r:shell:s0
     oneshot
-
-service huidu_recovery /system/bin/sh /system/bin/huidu_recovery.sh
-    class core
-    seclabel u:r:system_app:s0
 
 service sshd /system/bin/start-ssh
     class core
     seclabel u:r:system_app:s0
+
+service huidu_device_server /system/bin/cn.huidu.device.service
+    seclabel u:r:shell:s0
+    disabled
 
