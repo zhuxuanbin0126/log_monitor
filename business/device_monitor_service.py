@@ -10,6 +10,7 @@ from service.file_service import FileService
 from config import get_base_dir, time_diff_threshold, daily_time_diff_threshold
 import os
 from config import tool_path, program_path
+from device_config import get_init_config, get_upgrade_config
 
 class DeviceMonitorService:
     """设备监控业务服务类，负责设备监控的核心业务逻辑"""
@@ -22,192 +23,103 @@ class DeviceMonitorService:
         self.device_data = FileService.load_device_data()
         self.notepad_process = None  # 用于跟踪记事本进程
     
-    def count_init_setting(self, ip, password, device_id, system_type):
+    def count_init_setting(self, ip, password, device_id, system_type, custom_file_paths=None):
         """
         设备初始化设置开关机
         
         功能：
-        1. 使用可靠的文件推送方式（带MD5校验和重试）
-        2. 自动设置文件执行权限
-        3. 改进的错误处理和调试信息
-        4. 完整的文件存在性验证
+        1. 从 device_info.json 动态加载配置，支持新增型号无需修改代码
+        2. 使用可靠的文件推送方式（带MD5校验和重试）
+        3. 自动设置文件执行权限
+        4. 改进的错误处理和调试信息
+        5. 完整的文件存在性验证
+        
+        参数:
+            custom_file_paths: 自定义文件路径字典 {文件名: 本地路径}，如果为None则使用默认tool_path
         """
+        def get_file_path(filename):
+            if custom_file_paths and filename in custom_file_paths:
+                return custom_file_paths[filename]
+            return f"{tool_path}/{filename}"
+        
         try:
             resault_log = self.ntptime_checkout_time(ip, password, device_id, system_type)
             if "失败" in resault_log:
-                Exception(resault_log)
+                raise Exception(resault_log)
         except Exception as e:
             return f"{device_id} 设备校时失败 - {str(e)},请检查网络是否正常连接外网"
 
         try:
             dev_type_prefix = device_id.split('-')[0]
+            
+            # 从 device_info.json 动态加载初始化配置
+            init_config = get_init_config(dev_type_prefix)
+            if not init_config:
+                return f"{device_id} 设置开关机失败 - 未在 device_info.json 中找到 {dev_type_prefix} 的开关机初始化配置"
+            
+            is_android = ToolService.is_android_device(device_id)
             steps = []
             error = None
             files_to_check = []
             
-            if dev_type_prefix == "C16H":
-                # C16H: Android设备，使用ADB推送
-                # 1. 推送boot_counter.sh
-                stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/boot_counter.sh", "/system/bin/boot_counter.sh", use_reliable=True)
-                if stderr or returncode != 0:
-                    error = f"推送boot_counter.sh失败: {stderr}"
-                else:
-                    steps.append(f"boot_counter.sh推送成功 ({stdout})")
-                    files_to_check.append("/system/bin/boot_counter.sh")
-                    # 设置执行权限
-                    stdout_chmod, stderr_chmod, returncode_chmod = ToolService.adb_set_executable(ip, "/system/bin/boot_counter.sh")
-                    steps.append("boot_counter.sh执行权限设置完成")
+            # 1. 推送所有文件
+            for file_info in init_config.get("files", []):
+                local_file = file_info["local"]
+                remote_path = file_info["remote"]
+                desc = file_info.get("desc", local_file)
                 
-                # 2. 创建flag文件
                 if not error:
-                    stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, "touch /data/swich_counter_flag", ".")
+                    use_reliable = is_android
+                    stdout, stderr, returncode = ToolService.push_file(
+                        device_id, ip, password, 
+                        get_file_path(local_file), remote_path, 
+                        use_reliable=use_reliable
+                    )
                     if stderr or returncode != 0:
-                        error = f"创建swich_counter_flag失败: {stderr}"
+                        error = f"推送{local_file}失败: {stderr}"
                     else:
-                        steps.append("swich_counter_flag创建成功")
-                        files_to_check.append("/data/swich_counter_flag")
-                
-            elif dev_type_prefix in ["C16L", "C08L", "D16", "D36"]:
-                # Linux设备，使用PSCP推送
-                # 1. 推送boot_counter.sh
-                stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/boot_counter.sh", "/root/boot_counter.sh")
-                if stderr or returncode != 0:
-                    error = f"推送boot_counter.sh失败: {stderr}"
-                else:
-                    steps.append("boot_counter.sh推送成功")
-                    files_to_check.append("/root/boot_counter.sh")
-                
-                # 2. 推送run.sh
-                if not error:
-                    stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/run.sh", "/root/Box/run.sh")
-                    if stderr or returncode != 0:
-                        error = f"推送run.sh失败: {stderr}"
-                    else:
-                        steps.append("run.sh推送成功")
-                        files_to_check.append("/root/Box/run.sh")
-                
-                # 3. 创建flag文件
-                if not error:
-                    stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, "touch /root/Box/project/swich_counter_flag", ".")
-                    if stderr or returncode != 0:
-                        error = f"创建swich_counter_flag失败: {stderr}"
-                    else:
-                        steps.append("swich_counter_flag创建成功")
-                        files_to_check.append("/root/Box/project/swich_counter_flag")
-                
-                # 4. 给权限
-                if not error:
-                    stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, "chmod +x /root/boot_counter.sh && chmod +x /root/Box/run.sh", ".")
-                    if stderr or returncode != 0:
-                        error = f"修改权限失败: {stderr}"
-                    else:
-                        steps.append("权限修改成功")
-                
-            elif dev_type_prefix in ["A3L", "A4L", "A5L", "A6L", "B6L"]:
-                # Android设备，使用ADB推送
-                # 1. 推送boot_counter.sh
-                stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/boot_counter.sh", "/system/bin/boot_counter.sh", use_reliable=True)
-                if stderr or returncode != 0:
-                    error = f"推送boot_counter.sh失败: {stderr}"
-                else:
-                    steps.append(f"boot_counter.sh推送成功 ({stdout})")
-                    files_to_check.append("/system/bin/boot_counter.sh")
-                    # 设置执行权限
-                    stdout_chmod, stderr_chmod, returncode_chmod = ToolService.adb_set_executable(ip, "/system/bin/boot_counter.sh")
-                    steps.append("boot_counter.sh执行权限设置完成")
-                
-                # 2. 推送init.huidu.rc
-                if not error:
-                    stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/init.huidu.rc", "/vendor/etc/init/hw/init.huidu.rc", use_reliable=True)
-                    if stderr or returncode != 0:
-                        error = f"推送init.huidu.rc失败: {stderr}"
-                    else:
-                        steps.append(f"init.huidu.rc推送成功 ({stdout})")
-                        files_to_check.append("/vendor/etc/init/hw/init.huidu.rc")
-                
-                # 3. 创建flag文件
-                if not error:
-                    stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, "touch /data/swich_counter_flag", ".")
-                    if stderr or returncode != 0:
-                        error = f"创建swich_counter_flag失败: {stderr}"
-                    else:
-                        steps.append("swich_counter_flag创建成功")
-                        files_to_check.append("/data/swich_counter_flag")
-                
-            elif dev_type_prefix in ["H4K", "H6", "H8", "B8L"]:
-                # Android设备，使用ADB推送
-                # 1. 推送boot_counter.sh
-                stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/boot_counter.sh", "/system/bin/boot_counter.sh", use_reliable=True)
-                if stderr or returncode != 0:
-                    error = f"推送boot_counter.sh失败: {stderr}"
-                else:
-                    steps.append(f"boot_counter.sh推送成功 ({stdout})")
-                    files_to_check.append("/system/bin/boot_counter.sh")
-                    # 设置执行权限
-                    stdout_chmod, stderr_chmod, returncode_chmod = ToolService.adb_set_executable(ip, "/system/bin/boot_counter.sh")
-                    steps.append("boot_counter.sh执行权限设置完成")
-                
-                # 2. 推送init.rk356x.rc
-                if not error:
-                    stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/init.rk356x.rc", "/vendor/etc/init/hw/init.rk356x.rc", use_reliable=True)
-                    if stderr or returncode != 0:
-                        error = f"推送init.rk356x.rc失败: {stderr}"
-                    else:
-                        steps.append(f"init.rk356x.rc推送成功 ({stdout})")
-                        files_to_check.append("/vendor/etc/init/hw/init.rk356x.rc")
-                
-                # 3. 创建flag文件
-                if not error:
-                    stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, "touch /data/swich_counter_flag", ".")
-                    if stderr or returncode != 0:
-                        error = f"创建swich_counter_flag失败: {stderr}"
-                    else:
-                        steps.append("swich_counter_flag创建成功")
-                        files_to_check.append("/data/swich_counter_flag")
-                
-            elif dev_type_prefix in ["A7", "A8"]:
-                # Android设备，使用ADB推送
-                # 1. 推送boot_counter.sh
-                stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/boot_counter.sh", "/system/bin/boot_counter.sh", use_reliable=True)
-                if stderr or returncode != 0:
-                    error = f"推送boot_counter.sh失败: {stderr}"
-                else:
-                    steps.append(f"boot_counter.sh推送成功 ({stdout})")
-                    files_to_check.append("/system/bin/boot_counter.sh")
-                    # 设置执行权限
-                    stdout_chmod, stderr_chmod, returncode_chmod = ToolService.adb_set_executable(ip, "/system/bin/boot_counter.sh")
-                    steps.append("boot_counter.sh执行权限设置完成")
-                
-                # 2. 推送init.rk3399.rc
-                if not error:
-                    stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/init.rk3399.rc", "/vendor/etc/init/hw/init.rk3399.rc", use_reliable=True)
-                    if stderr or returncode != 0:
-                        error = f"推送init.rk3399.rc失败: {stderr}"
-                    else:
-                        steps.append(f"init.rk3399.rc推送成功 ({stdout})")
-                        files_to_check.append("/vendor/etc/init/hw/init.rk3399.rc")
-                
-                # 3. 创建flag文件
-                if not error:
-                    stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, "touch /data/swich_counter_flag", ".")
-                    if stderr or returncode != 0:
-                        error = f"创建swich_counter_flag失败: {stderr}"
-                    else:
-                        steps.append("swich_counter_flag创建成功")
-                        files_to_check.append("/data/swich_counter_flag")
+                        steps.append(f"{local_file}推送成功 ({stdout})")
+                        files_to_check.append(remote_path)
+                        
+                        # Android设备：系统二进制文件需要设置执行权限
+                        if is_android and remote_path.startswith("/system/bin/"):
+                            stdout_chmod, stderr_chmod, returncode_chmod = ToolService.adb_set_executable(ip, remote_path)
+                            if stderr_chmod or returncode_chmod != 0:
+                                error = f"设置{local_file}执行权限失败: {stderr_chmod}"
+                            else:
+                                steps.append(f"{local_file}执行权限设置完成")
             
-            # 执行sync同步
+            # 2. 执行额外命令
+            if not error:
+                for cmd in init_config.get("extra_commands", []):
+                    stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, cmd, ".")
+                    if stderr or returncode != 0:
+                        error = f"执行命令失败 '{cmd}': {stderr}"
+                        break
+                    else:
+                        steps.append(f"执行命令成功: {cmd}")
+            
+            # 3. 创建flag文件
+            flag_path = init_config.get("flag_path", "")
+            if not error and flag_path:
+                flag_cmd = f"touch {flag_path}/swich_counter_flag"
+                stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, flag_cmd, ".")
+                if stderr or returncode != 0:
+                    error = f"创建swich_counter_flag失败: {stderr}"
+                else:
+                    steps.append("swich_counter_flag创建成功")
+                    files_to_check.append(f"{flag_path}/swich_counter_flag")
+            
+            # 4. 执行sync同步
             if not error:
                 stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, "sync", ".")
                 steps.append("sync执行成功")
             
-            # 验证文件是否存在 - 使用可靠的文件检查方法
+            # 5. 验证文件是否存在
             if not error and files_to_check:
                 missing_files = []
                 for file_path in files_to_check:
-                    # 短暂延迟确保文件写入完成
                     time.sleep(0.3)
-                    # 使用专门的文件检查方法，多次尝试
                     exists = False
                     for attempt in range(3):
                         try:
@@ -215,7 +127,7 @@ class DeviceMonitorService:
                             if exists:
                                 break
                             if attempt < 2:
-                                time.sleep(0.5)  # 失败后等待再试
+                                time.sleep(0.5)
                         except Exception as e:
                             if attempt < 2:
                                 time.sleep(0.5)
@@ -229,7 +141,7 @@ class DeviceMonitorService:
                     steps.append("文件验证成功")
             
             if error:
-                return f"{device_id} 设置开关机失败 - {error} )"
+                return f"{device_id} 设置开关机失败 - {error}"
             else:
                 return f"{device_id} 设置开关机成功 - 执行步骤: {'; '.join(steps)}"
                 
@@ -465,31 +377,51 @@ class DeviceMonitorService:
         except Exception as e:
             return f"{device_id} 设置时间失败 - {str(e)}"
 
-    def upgrade_program(self, ip, password, device_id, system_type):
-        """更新设备节目"""
+    def upgrade_program(self, ip, password, device_id, system_type, custom_file_paths=None):
+        """
+        更新设备节目
+        
+        参数:
+            custom_file_paths: 自定义节目文件路径字典 {设备型号前缀: 本地路径}
+        """
         try:
             dev_type_prefix = device_id.split('-')[0]
-            remote_file = ""
-
-            os.makedirs(program_path, exist_ok=True)
-
-            if not os.path.exists(f"{program_path}/{dev_type_prefix}_project.tar.gz"):
-                return f"设备节目不存在，请检查, 并创建：{program_path}/{dev_type_prefix}_project.tar.gz"
-
-            if ToolService.is_android_device(device_id):
-                remote_file = "/data/media/0/MagicPlayer"
-                ToolService.push_file(device_id, ip, password, f"{program_path}/{dev_type_prefix}_project.tar.gz", f"{remote_file}/project.tar.gz")
-                ToolService.execute_command(device_id, ip, password, f"tar -zxf {remote_file}/project.tar.gz -C {remote_file}", ".")
-                restart_player_cmd = "am start -S cn.huidu.lcd.player/.PlayerActivity"
-            else:
-                remote_file = "/root/Box/project"
-                ToolService.execute_command(device_id, ip, password, "rm /root/Box/project/*.*", ".")
-                ToolService.push_file(device_id, ip, password, f"{program_path}/{dev_type_prefix}_project.tar.gz", f"{remote_file}/project.tar.gz")
-                restart_player_cmd = "/root/Box/run.sh"
-                ToolService.execute_command(device_id, ip, password, f"tar -zxf {remote_file}/project.tar.gz -C {remote_file}", ".")
             
-            ToolService.execute_command(device_id, ip, password, f"rm {remote_file}/project.tar.gz", ".")
-            ToolService.execute_command(device_id, ip, password, restart_player_cmd, ".")
+            # 从 device_info.json 动态加载发送节目配置
+            upgrade_config = get_upgrade_config(dev_type_prefix)
+            if not upgrade_config:
+                return f"{device_id} 更新节目失败 - 未在 device_info.json 中找到 {dev_type_prefix} 的发送节目配置"
+            
+            remote_dir = upgrade_config["remote_dir"]
+            restart_cmd = upgrade_config.get("restart_cmd", "")
+            pre_commands = upgrade_config.get("pre_commands", [])
+            program_name = upgrade_config["program_name"].replace("{model}", dev_type_prefix)
+            
+            # 获取节目文件路径（优先使用自定义路径）
+            if custom_file_paths and dev_type_prefix in custom_file_paths:
+                local_program = custom_file_paths[dev_type_prefix]
+            else:
+                os.makedirs(program_path, exist_ok=True)
+                local_program = f"{program_path}/{program_name}"
+            
+            if not os.path.exists(local_program):
+                return f"设备节目不存在，请检查: {local_program}"
+            
+            # 执行前置命令
+            for cmd in pre_commands:
+                ToolService.execute_command(device_id, ip, password, cmd, ".")
+            
+            # 推送节目文件
+            ToolService.push_file(device_id, ip, password, local_program, f"{remote_dir}/project.tar.gz")
+            
+            # 解压节目文件
+            ToolService.execute_command(device_id, ip, password, f"tar -zxf {remote_dir}/project.tar.gz -C {remote_dir}", ".")
+            
+            # 删除压缩包
+            ToolService.execute_command(device_id, ip, password, f"rm {remote_dir}/project.tar.gz", ".")
+            
+            # 重启播放器
+            ToolService.execute_command(device_id, ip, password, restart_cmd, ".")
             return f"{device_id} 更新节目成功,重启播放器"
         except Exception as e:
             return f"{device_id} 更新节目失败 - {str(e)}"
@@ -879,7 +811,7 @@ class DeviceMonitorService:
         # 确保截图存储目录存在
         os.makedirs(screenshot_path, exist_ok=True)
         # 检查设备类型是否支持截图
-        supported_dev_types = ["H6", "H8", "H4K", "B6L", "B8L", "A3L", "A4L", "A5L", "A6L", "C16H"]
+        supported_dev_types = ["H6", "H8", "H4K", "B6L", "B8L", "A3L", "A4L", "A5L", "A6L", "C16H", "H16", "H20"]
         dev_type_prefix = device_id.split('-')[0] if '-' in device_id else device_id
         
         if dev_type_prefix not in supported_dev_types:

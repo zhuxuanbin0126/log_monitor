@@ -4,20 +4,48 @@
         "板载Wi-Fi 2.4G": "支持",
         "板载Wi-Fi 5G": "不支持",
         "主控型号": "PX30",
-        "系统版本": "Liunx",
+        "系统版本": "Linux",
         "保存OTG属性": "nan",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "不支持"
+        "板载Wi-Fi 5G_1": "不支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/root/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "run.sh", "remote": "/root/Box/run.sh", "desc": "运行脚本"}
+            ],
+            "flag_path": "/root/Box/project",
+            "extra_commands": ["chmod +x /root/boot_counter.sh", "chmod +x /root/Box/run.sh"]
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/root/Box/project",
+            "restart_cmd": "/root/Box/run.sh",
+            "pre_commands": ["rm /root/Box/project/*.*"]
+        }
     },
     {
         "型号": "D36",
         "板载Wi-Fi 2.4G": "支持",
         "板载Wi-Fi 5G": "不支持",
         "主控型号": "nan",
-        "系统版本": "Liunx",
+        "系统版本": "Linux",
         "保存OTG属性": "nan",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "不支持"
+        "板载Wi-Fi 5G_1": "不支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/root/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "run.sh", "remote": "/root/Box/run.sh", "desc": "运行脚本"}
+            ],
+            "flag_path": "/root/Box/project",
+            "extra_commands": ["chmod +x /root/boot_counter.sh", "chmod +x /root/Box/run.sh"]
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/root/Box/project",
+            "restart_cmd": "/root/Box/run.sh",
+            "pre_commands": ["rm /root/Box/project/*.*"]
+        }
     },
     {
         "型号": "A7",
@@ -27,7 +55,21 @@
         "系统版本": "安卓 10",
         "保存OTG属性": "echo peripheral > /sys/devices/platform/ff770000.syscon/ff770000.syscon:usb2-phy@e450/otg_mode",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "支持"
+        "板载Wi-Fi 5G_1": "支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.rk3399.rc", "remote": "/vendor/etc/init/hw/init.rk3399.rc", "desc": "初始化配置(RK3399)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     },
     {
         "型号": "A8",
@@ -37,7 +79,21 @@
         "系统版本": "安卓 10",
         "保存OTG属性": "echo peripheral > /sys/devices/platform/ff770000.syscon/ff770000.syscon:usb2-phy@e450/otg_mode",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "支持"
+        "板载Wi-Fi 5G_1": "支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.rk3399.rc", "remote": "/vendor/etc/init/hw/init.rk3399.rc", "desc": "初始化配置(RK3399)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     },
     {
         "型号": "A6L",
@@ -47,7 +103,21 @@
         "系统版本": "安卓 11",
         "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "支持"
+        "板载Wi-Fi 5G_1": "支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.huidu.rc", "remote": "/vendor/etc/init/hw/init.huidu.rc", "desc": "初始化配置(huidu通用)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     },
     {
         "型号": "A5L",
@@ -57,7 +127,21 @@
         "系统版本": "安卓 11",
         "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "不支持"
+        "板载Wi-Fi 5G_1": "不支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.huidu.rc", "remote": "/vendor/etc/init/hw/init.huidu.rc", "desc": "初始化配置(huidu通用)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     },
     {
         "型号": "A4L",
@@ -67,7 +151,21 @@
         "系统版本": "安卓 11",
         "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "不支持"
+        "板载Wi-Fi 5G_1": "不支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.huidu.rc", "remote": "/vendor/etc/init/hw/init.huidu.rc", "desc": "初始化配置(huidu通用)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     },
     {
         "型号": "A3L",
@@ -77,17 +175,45 @@
         "系统版本": "安卓 11",
         "保存OTG属性": "echo peripheral > /sys/devices/platform/ff450000.syscon/ff450000.syscon:usb2-phy@100/otg_mode",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "不支持"
+        "板载Wi-Fi 5G_1": "不支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.huidu.rc", "remote": "/vendor/etc/init/hw/init.huidu.rc", "desc": "初始化配置(huidu通用)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     },
     {
         "型号": "C16L",
         "板载Wi-Fi 2.4G": "支持",
         "板载Wi-Fi 5G": "不支持",
         "主控型号": "PX30",
-        "系统版本": "Liunx",
+        "系统版本": "Linux",
         "保存OTG属性": "nan",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "不支持"
+        "板载Wi-Fi 5G_1": "不支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/root/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "run.sh", "remote": "/root/Box/run.sh", "desc": "运行脚本"}
+            ],
+            "flag_path": "/root/Box/project",
+            "extra_commands": ["chmod +x /root/boot_counter.sh", "chmod +x /root/Box/run.sh"]
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/root/Box/project",
+            "restart_cmd": "/root/Box/run.sh",
+            "pre_commands": ["rm /root/Box/project/*.*"]
+        }
     },
     {
         "型号": "B6L",
@@ -97,17 +223,45 @@
         "系统版本": "安卓 11",
         "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "不支持"
+        "板载Wi-Fi 5G_1": "不支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.huidu.rc", "remote": "/vendor/etc/init/hw/init.huidu.rc", "desc": "初始化配置(huidu通用)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     },
     {
         "型号": "C08L",
         "板载Wi-Fi 2.4G": "支持",
         "板载Wi-Fi 5G": "不支持",
         "主控型号": "PX30",
-        "系统版本": "Liunx",
+        "系统版本": "Linux",
         "保存OTG属性": "nan",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "不支持"
+        "板载Wi-Fi 5G_1": "不支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/root/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "run.sh", "remote": "/root/Box/run.sh", "desc": "运行脚本"}
+            ],
+            "flag_path": "/root/Box/project",
+            "extra_commands": ["chmod +x /root/boot_counter.sh", "chmod +x /root/Box/run.sh"]
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/root/Box/project",
+            "restart_cmd": "/root/Box/run.sh",
+            "pre_commands": ["rm /root/Box/project/*.*"]
+        }
     },
     {
         "型号": "H4K",
@@ -117,7 +271,21 @@
         "系统版本": "安卓11",
         "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "支持"
+        "板载Wi-Fi 5G_1": "支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.rk356x.rc", "remote": "/vendor/etc/init/hw/init.rk356x.rc", "desc": "初始化配置(RK356x)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     },
     {
         "型号": "H6",
@@ -127,7 +295,21 @@
         "系统版本": "安卓 11",
         "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "支持"
+        "板载Wi-Fi 5G_1": "支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.rk356x.rc", "remote": "/vendor/etc/init/hw/init.rk356x.rc", "desc": "初始化配置(RK356x)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     },
     {
         "型号": "H8",
@@ -137,7 +319,21 @@
         "系统版本": "安卓 11",
         "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "支持"
+        "板载Wi-Fi 5G_1": "支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.rk356x.rc", "remote": "/vendor/etc/init/hw/init.rk356x.rc", "desc": "初始化配置(RK356x)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     },
     {
         "型号": "B8L",
@@ -147,7 +343,21 @@
         "系统版本": "安卓 11",
         "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "支持"
+        "板载Wi-Fi 5G_1": "支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.rk356x.rc", "remote": "/vendor/etc/init/hw/init.rk356x.rc", "desc": "初始化配置(RK356x)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     },
     {
         "型号": "C16H",
@@ -157,6 +367,67 @@
         "系统版本": "安卓 10",
         "保存OTG属性": "nan",
         "板载Wi-Fi 2.4G_1": "支持",
-        "板载Wi-Fi 5G_1": "不支持"
+        "板载Wi-Fi 5G_1": "不支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
+    },
+    {
+        "型号": "H16",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "支持",
+        "主控型号": "RK3588",
+        "系统版本": "安卓 11",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.rk3588.rc", "remote": "/vendor/etc/init/hw/init.rk3588.rc", "desc": "初始化配置(RK3588)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
+    },
+    {
+        "型号": "H20",
+        "板载Wi-Fi 2.4G": "支持",
+        "板载Wi-Fi 5G": "支持",
+        "主控型号": "RK3588",
+        "系统版本": "安卓 11",
+        "保存OTG属性": "echo peripheral > /sys/devices/platform/fe8a0000.usb2-phy/otg_mode",
+        "板载Wi-Fi 2.4G_1": "支持",
+        "板载Wi-Fi 5G_1": "支持",
+        "开关机初始化": {
+            "files": [
+                {"local": "boot_counter.sh", "remote": "/system/bin/boot_counter.sh", "desc": "开关机计数脚本"},
+                {"local": "init.rk3588.rc", "remote": "/vendor/etc/init/hw/init.rk3588.rc", "desc": "初始化配置(RK3588)"}
+            ],
+            "flag_path": "/data",
+            "extra_commands": []
+        },
+        "发送节目": {
+            "program_name": "{model}_project.tar.gz",
+            "remote_dir": "/data/media/0/MagicPlayer",
+            "restart_cmd": "am start -S cn.huidu.lcd.player/.PlayerActivity",
+            "pre_commands": []
+        }
     }
 ]

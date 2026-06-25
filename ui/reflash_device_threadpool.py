@@ -16,7 +16,7 @@ def run_time(func, *args):
 
 class GetDeviceInfoManager(QObject):
     # 改进1：新增通用类型信号
-    taskCompleted = pyqtSignal(dict)
+    taskCompleted = pyqtSignal(object)
     # 改进2：新增全局完成信号
     allTasksCompleted = pyqtSignal()
 

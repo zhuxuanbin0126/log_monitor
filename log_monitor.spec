@@ -6,7 +6,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        # 工具文件
+        # 工具文件 - 打包后放在 tools/bin 目录
         ('tools/bin/DeviceId.exe', 'tools/bin'),
         ('tools/bin/bash.exe', 'tools/bin'),
         ('tools/bin/grep.exe', 'tools/bin'),
@@ -18,13 +18,20 @@ a = Analysis(
         ('tools/bin/HPassword.exe', 'tools/bin'),
         ('tools/bin/HSDKCmd.exe', 'tools/bin'),
         ('tools/bin/scrcpy.dll', 'tools/bin'),
-        # 脚本文件
+        # 脚本文件 - 打包后放在 tools 目录
         ('tools/getdeviceinfo.sh', 'tools'),
         ('tools/boot_counter.sh', 'tools'),
         ('tools/run.sh', 'tools'),
-        # 配置文件
+        ('tools/ntpdate', 'tools'),
+        # RC配置文件 - 打包后放在 tools 目录
+        ('tools/init.huidu.rc', 'tools'),
+        ('tools/init.rk3399.rc', 'tools'),
+        ('tools/init.rk356x.rc', 'tools'),
+        ('tools/init.rk3588.rc', 'tools'),
+        # 配置文件 - 打包后放在根目录
         ('config.py', '.'),
         ('version_info.txt', '.'),
+        ('device_info.json', '.'),
     ],
     hiddenimports=['pandas', 'openpyxl', 'PyQt5.QtWidgets', 'PyQt5.QtCore', 'PyQt5.QtGui'],
     hookspath=[],

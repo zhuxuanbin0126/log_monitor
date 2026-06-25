@@ -30,7 +30,7 @@ class BaseWindow(QMainWindow):
     def finalize_layout(self):
         """完成布局设置"""
         # 设置分割器初始大小
-        self.splitter.setSizes([300, 500])
+        self.splitter.setSizes([600, 400])
         
         # 将分割器添加到主布局
         self.main_layout.addWidget(self.splitter)

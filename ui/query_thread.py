@@ -8,7 +8,7 @@ class QueryThread(QThread):
     error_signal = pyqtSignal(str)
     end_signal = pyqtSignal(int)
     
-    def __init__(self, device_id, ip, password, query_type, control_panel, system_type, switch_log_file, query_count):
+    def __init__(self, device_id, ip, password, query_type, control_panel, system_type, switch_log_file, query_count, custom_file_paths=None):
         super().__init__()
         self.device_id = device_id
         self.ip = ip
@@ -19,6 +19,7 @@ class QueryThread(QThread):
         self.system_type = system_type
         self.switch_log_file = switch_log_file
         self.query_count = query_count
+        self.custom_file_paths = custom_file_paths  # 自定义文件路径 {文件名: 本地路径}
 
     def run(self):
         try:
@@ -43,16 +44,20 @@ class QueryThread(QThread):
                 results['start_count'] = start_count
 
             if  self.query_type == "count_init":
-                count_init = monitor_service.count_init_setting(self.ip, self.password, self.device_id, self.system_type)
+                count_init = monitor_service.count_init_setting(
+                    self.ip, self.password, self.device_id, self.system_type,
+                    custom_file_paths=self.custom_file_paths
+                )
                 results['count_init'] = count_init
             
             if self.query_type == "sum_switch":
-                if "Linux" in self.system_type:
+                sys_type = self.system_type.lower() if self.system_type else ""
+                if "linux" in sys_type:
                     path = "/root/Box/project"
-                elif "Android" in self.system_type:
+                elif "android" in sys_type:
                     path = "/data"
                 else:
-                    raise ValueError("暂不支持此系统类型")
+                    path = "/root/Box/project"
                 switch_time, network_time, success, error_msg = monitor_service.sum_switch_count(self.ip, self.password, self.device_id, path)
                 if success:
                     if self.switch_log_file != None:
@@ -63,12 +68,13 @@ class QueryThread(QThread):
                     results['sum_switch'] = error_msg
 
             if self.query_type == "clean_switch":
-                if "Linux" in self.system_type:
+                sys_type = self.system_type.lower() if self.system_type else ""
+                if "linux" in sys_type:
                     path = "/root/Box/project"
-                elif "Android" in self.system_type:
+                elif "android" in sys_type:
                     path = "/data"
                 else:
-                    raise ValueError("暂不支持此系统类型")
+                    path = "/root/Box/project"
                 success, error_msg = monitor_service.clean_switch_log(self.ip, self.password, self.device_id, path)
                 if success:
                     results['clean_switch'] = f"{self.device_id} 开关机记录已清除"
@@ -80,7 +86,10 @@ class QueryThread(QThread):
                 results['check_time'] = results_log
 
             if self.query_type == "upgrade_program":
-                results_upgrade_program = monitor_service.upgrade_program(self.ip, self.password, self.device_id, self.system_type)
+                results_upgrade_program = monitor_service.upgrade_program(
+                    self.ip, self.password, self.device_id, self.system_type,
+                    custom_file_paths=self.custom_file_paths
+                )
                 results['upgrade_program'] = results_upgrade_program
 
             if self.query_type == "screenshot":
@@ -88,12 +97,13 @@ class QueryThread(QThread):
                 results['screenshot'] = screenshot_result
             
             if self.query_type == "output_log":
-                if "Linux" in self.system_type:
+                sys_type = self.system_type.lower() if self.system_type else ""
+                if "linux" in sys_type:
                     path = "/root/Box/project"
-                elif "Android" in self.system_type:
+                elif "android" in sys_type:
                     path = "/data"
                 else:
-                    raise ValueError("暂不支持此系统类型")
+                    path = "/root/Box/project"
                 output_success, output_log = monitor_service.switch_log_output(self.ip, self.password, self.device_id, self.system_type, path)
                 results['output_log'] = output_log
 

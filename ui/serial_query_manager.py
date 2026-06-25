@@ -10,12 +10,13 @@ class SerialQueryManager(QThread):
     error_signal = pyqtSignal(str, str)  # (device_id, error_msg)
     finished_signal = pyqtSignal(int)
     
-    def __init__(self, devices_info, query_type, control_panel, switch_log_file):
+    def __init__(self, devices_info, query_type, control_panel, switch_log_file, custom_file_paths=None):
         super().__init__()
         self.devices_info = devices_info  # 设备信息列表: [(device_id, ip, password, system_type), ...]
         self.query_type = query_type
         self.control_panel = control_panel
         self.switch_log_file = switch_log_file
+        self.custom_file_paths = custom_file_paths  # 自定义文件路径 {文件名: 本地路径}
         self.query_count = [0]
         self.is_running = True
         self.mutex = QMutex()
@@ -68,16 +69,20 @@ class SerialQueryManager(QThread):
                         results['start_count'] = start_count
 
                     if self.query_type == "count_init":
-                        count_init = monitor_service.count_init_setting(ip, password, device_id, system_type)
+                        count_init = monitor_service.count_init_setting(
+                            ip, password, device_id, system_type, 
+                            custom_file_paths=self.custom_file_paths
+                        )
                         results['count_init'] = count_init
                     
                     if self.query_type == "sum_switch":
-                        if "Linux" in system_type:
+                        sys_type = system_type.lower() if system_type else ""
+                        if "linux" in sys_type:
                             path = "/root/Box/project"
-                        elif "Android" in system_type:
+                        elif "android" in sys_type:
                             path = "/data"
                         else:
-                            raise ValueError("暂不支持此系统类型")
+                            path = "/root/Box/project"
                         switch_time, network_time, success, error_msg = monitor_service.sum_switch_count(ip, password, device_id, path)
                         if success:
                             if self.switch_log_file != None:
@@ -88,12 +93,13 @@ class SerialQueryManager(QThread):
                             results['sum_switch'] = error_msg
 
                     if self.query_type == "clean_switch":
-                        if "Linux" in system_type:
+                        sys_type = system_type.lower() if system_type else ""
+                        if "linux" in sys_type:
                             path = "/root/Box/project"
-                        elif "Android" in system_type:
+                        elif "android" in sys_type:
                             path = "/data"
                         else:
-                            raise ValueError("暂不支持此系统类型")
+                            path = "/root/Box/project"
                         success, error_msg = monitor_service.clean_switch_log(ip, password, device_id, path)
                         if success:
                             results['clean_switch'] = f"{device_id} 开关机记录已清除"
@@ -105,7 +111,10 @@ class SerialQueryManager(QThread):
                         results['check_time'] = results_log
 
                     if self.query_type == "upgrade_program":
-                        results_upgrade_program = monitor_service.upgrade_program(ip, password, device_id, system_type)
+                        results_upgrade_program = monitor_service.upgrade_program(
+                            ip, password, device_id, system_type,
+                            custom_file_paths=self.custom_file_paths
+                        )
                         results['upgrade_program'] = results_upgrade_program
 
                     if self.query_type == "screenshot":
@@ -113,12 +122,13 @@ class SerialQueryManager(QThread):
                         results['screenshot'] = screenshot_result
                     
                     if self.query_type == "output_log":
-                        if "Linux" in system_type:
+                        sys_type = system_type.lower() if system_type else ""
+                        if "linux" in sys_type:
                             path = "/root/Box/project"
-                        elif "Android" in system_type:
+                        elif "android" in sys_type:
                             path = "/data"
                         else:
-                            raise ValueError("暂不支持此系统类型")
+                            path = "/root/Box/project"
                         output_success, output_log = monitor_service.switch_log_output(ip, password, device_id, system_type, path)
                         results['output_log'] = output_log
                     
@@ -141,7 +151,7 @@ class SerialQueryManager(QThread):
                     self.msleep(800)
             
             # 所有设备处理完成
-            self.finished_signal.emit(self.query_count[0])
+            self.finished_signal.emit(total_devices)
             
         except Exception as e:
             self.error_signal.emit("Unknown", f"串行查询管理器出错: {str(e)}")

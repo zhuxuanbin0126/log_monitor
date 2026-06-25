@@ -6,25 +6,20 @@
 import os
 import sys
 
-VERSION = '1.0.3.0'
+VERSION = '1.0.4.0'
 
 # 获取项目根目录，支持打包后的环境
 def get_project_root():
     if getattr(sys, 'frozen', False):
-        # 打包后的环境
-        if hasattr(sys, '_MEIPASS'):
-            return sys._MEIPASS
-        else:
-            return os.path.dirname(sys.executable)
+        return os.path.dirname(sys.executable)
     else:
-        # 开发环境
         return os.path.dirname(os.path.abspath(__file__))
 
 PROJECT_ROOT = get_project_root()
 getinfo_path = os.path.join(PROJECT_ROOT, "tools", "getdeviceinfo.sh")
 
 # 设备类型配置 (由于A7 A8不支持ssh 所以暂时不支持)
-supported_dev_types = ['A-B-C-D-H','A3L', 'A4L', 'A5L', 'A6L', 'B6L', 'B8L', 'C08L', 'C16H', 'H4K', 'H6', 'H8', 'D16', 'C16L', 'A7', 'A8','H20']
+supported_dev_types = ['A-B-C-D-H','A3L', 'A4L', 'A5L', 'A6L', 'B6L', 'B8L', 'C08L', 'C16H', 'H4K', 'H6', 'H8', 'D16', 'C16L', 'A7', 'A8','H20', 'H16']
 """支持的设备类型列表"""
 
 tool_path = os.path.join(PROJECT_ROOT, "tools") # 工具路径 - 使用绝对路径

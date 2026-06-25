@@ -235,16 +235,17 @@ class ToolService:
                 # 连接设备
                 ToolService.run_command(f"{ADB_PATH} connect {ip}:5555")
                 time.sleep(0.5)
+                serial = ToolService.adb_get_device_serial(ip)
                 
                 # 尝试通过getdeviceinfo.sh获取信息（如果存在）
                 try:
                     # 先检查脚本是否存在
-                    check_cmd = f"{ADB_PATH} -s {ip}:5555 shell ls /data/getdeviceinfo.sh"
+                    check_cmd = f"{ADB_PATH} -s {serial} shell ls /data/getdeviceinfo.sh"
                     stdout, stderr, returncode = ToolService.run_command(check_cmd, timeout=5)
                     
                     if not stderr and "No such" not in stdout:
                         # 脚本存在，执行它
-                        cmd = f"{ADB_PATH} -s {ip}:5555 shell sh /data/getdeviceinfo.sh"
+                        cmd = f"{ADB_PATH} -s {serial} shell sh /data/getdeviceinfo.sh"
                         stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
                         if stdout and not stderr:
                             info_parts = stdout.strip().split()
@@ -258,13 +259,13 @@ class ToolService:
                 # 如果没有获取到信息，尝试直接获取
                 if mac_address == "N/A":
                     # 获取MAC地址
-                    cmd = f"{ADB_PATH} -s {ip}:5555 shell cat /sys/class/net/eth0/address"
+                    cmd = f"{ADB_PATH} -s {serial} shell cat /sys/class/net/eth0/address"
                     stdout, stderr, returncode = ToolService.run_command(cmd, timeout=5)
                     if stdout and not stderr:
                         mac_address = stdout.strip()
                     
                     # 获取设备名称
-                    cmd = f"{ADB_PATH} -s {ip}:5555 shell getprop ro.product.model"
+                    cmd = f"{ADB_PATH} -s {serial} shell getprop ro.product.model"
                     stdout, stderr, returncode = ToolService.run_command(cmd, timeout=5)
                     if stdout and not stderr:
                         device_name = stdout.strip()
@@ -312,15 +313,16 @@ class ToolService:
                 # Android设备使用ADB方式
                 ToolService.run_command(f"{ADB_PATH} connect {ip}:5555")
                 time.sleep(0.5)
+                serial = ToolService.adb_get_device_serial(ip)
                 
                 # 获取OTA版本
-                cmd = f"{ADB_PATH} -s {ip}:5555 shell getprop ro.build.version"
+                cmd = f"{ADB_PATH} -s {serial} shell getprop ro.build.version"
                 stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
                 if stdout and not stderr:
                     ota_version = stdout.strip()
                 
                 # 获取主版本
-                cmd = f"{ADB_PATH} -s {ip}:5555 shell dumpsys package cn.huidu.lcd.player"
+                cmd = f"{ADB_PATH} -s {serial} shell dumpsys package cn.huidu.lcd.player"
                 stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
                 if stdout and not stderr:
                     lines = stdout.strip().split('\n')
@@ -472,7 +474,8 @@ class ToolService:
         # 连接设备
         ToolService.run_command(f"{ADB_PATH} connect {ip}:5555")
         time.sleep(0.5)  # 等待连接建立
-        cmd = f"{ADB_PATH} -s {ip}:5555 shell {command_script}"
+        serial = ToolService.adb_get_device_serial(ip)
+        cmd = f"{ADB_PATH} -s {serial} shell {command_script}"
         stdout, stderr, returncode = ToolService.run_command(cmd)
         # 断开连接
         ToolService.run_command(f"{ADB_PATH} disconnect {ip}:5555")
@@ -529,9 +532,10 @@ class ToolService:
                 except Exception as e:
                     return "", str(e), -1
             
+            serial = ToolService.adb_get_device_serial(ip)
             # 推送文件
             print(f"[push] 开始推送文件: {local_file} -> {remote_file}")
-            cmd = f"{ADB_PATH} -s {ip}:5555 push \"{local_file}\" \"{remote_file}\""
+            cmd = f"{ADB_PATH} -s {serial} push \"{local_file}\" \"{remote_file}\""
             stdout, stderr, returncode = ToolService.run_command(cmd, timeout=60)
             print(f"[push] 推送结果: stdout={stdout}, stderr={stderr}, code={returncode}")
             
@@ -552,8 +556,9 @@ class ToolService:
             if stderr and ("unable" in stderr.lower() or "cannot" in stderr.lower() or "refused" in stderr.lower()):
                 return "", stderr, returncode
             
+            serial = ToolService.adb_get_device_serial(ip)
             # 在pull之前执行adb root以提升权限
-            cmd = f"{ADB_PATH} -s {ip}:5555 root"
+            cmd = f"{ADB_PATH} -s {serial} root"
             ToolService.run_command(cmd, timeout=10)
             
             # 等待root生效，部分设备root后会短暂断开连接
@@ -565,7 +570,7 @@ class ToolService:
             time.sleep(2)
             
             # 拉取文件
-            cmd = f"{ADB_PATH} -s {ip}:5555 pull \"{remote_file}\" \"{local_file}\""
+            cmd = f"{ADB_PATH} -s {serial} pull \"{remote_file}\" \"{local_file}\""
             stdout, stderr, returncode = ToolService.run_command(cmd, timeout=60)
             
             ToolService.adb_disconnect()
@@ -658,7 +663,8 @@ class ToolService:
         返回:
             tuple: (stdout, stderr, returncode)
         """
-        cmd = f"{ADB_PATH} -s {ip}:5555 shell screencap -p {remote_file}"
+        serial = ToolService.adb_get_device_serial(ip)
+        cmd = f"{ADB_PATH} -s {serial} shell screencap -p {remote_file}"
         return ToolService.run_command(cmd)
     
     @staticmethod
@@ -733,6 +739,34 @@ class ToolService:
         return ToolService.run_command(cmd)
     
     @staticmethod
+    def adb_get_device_serial(ip):
+        """
+        从adb devices输出中获取设备序列号
+        
+        参数:
+            ip: 设备IP地址
+            
+        返回:
+            str: 设备序列号，失败时回退到 ip:5555 格式
+        """
+        try:
+            cmd = f"{ADB_PATH} devices"
+            stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
+            if returncode == 0 and stdout:
+                for line in stdout.strip().split('\n'):
+                    line = line.strip()
+                    if line and '\t' in line and 'device' in line and not line.startswith('*'):
+                        parts = line.split('\t')
+                        serial = parts[0].strip()
+                        if serial and serial != 'List of devices attached':
+                            if serial.startswith(f"{ip}:"):
+                                return serial
+        except Exception:
+            pass
+        # 回退到 ip:5555 格式
+        return f"{ip}:5555"
+    
+    @staticmethod
     def adb_disconnect():
         """
         使用adb断开所有连接
@@ -755,7 +789,8 @@ class ToolService:
         返回:
             tuple: (stdout, stderr, returncode)
         """
-        cmd = f"{ADB_PATH} -s {ip}:5555 shell rm {remote_file}"
+        serial = ToolService.adb_get_device_serial(ip)
+        cmd = f"{ADB_PATH} -s {serial} shell rm {remote_file}"
         return ToolService.run_command(cmd)
     
     @staticmethod
@@ -798,8 +833,9 @@ class ToolService:
             if stderr and ("unable" in stderr.lower() or "cannot" in stderr.lower() or "refused" in stderr.lower()):
                 return None
             
+            serial = ToolService.adb_get_device_serial(ip)
             # 尝试使用md5sum命令
-            cmd = f"{ADB_PATH} -s {ip}:5555 shell md5sum {remote_file}"
+            cmd = f"{ADB_PATH} -s {serial} shell md5sum {remote_file}"
             stdout, stderr, returncode = ToolService.run_command(cmd)
             if not stderr and stdout:
                 md5_value = stdout.strip().split()[0]
@@ -836,7 +872,8 @@ class ToolService:
             bool: True表示成功，False表示失败
         """
         try:
-            cmd = f"{ADB_PATH} -s {ip}:5555 shell mkdir -p {remote_dir}"
+            serial = ToolService.adb_get_device_serial(ip)
+            cmd = f"{ADB_PATH} -s {serial} shell mkdir -p {remote_dir}"
             stdout, stderr, returncode = ToolService.run_command(cmd)
             return returncode == 0 or (stderr and "File exists" in stderr)
         except Exception as e:
@@ -872,6 +909,7 @@ class ToolService:
         # 判断是否需要remount
         need_remount = remote_file.startswith("/system/") or "/system/" in remote_file or remote_dir.startswith("/system/")
         
+        serial = ToolService.adb_get_device_serial(ip)
         for attempt in range(max_retries):
             try:
                 # 使用新的连接准备方法
@@ -903,7 +941,7 @@ class ToolService:
                     ToolService.adb_ensure_directory(ip, remote_dir)
                 
                 # 推送文件
-                cmd = f"{ADB_PATH} -s {ip}:5555 push \"{local_file}\" \"{remote_file}\""
+                cmd = f"{ADB_PATH} -s {serial} push \"{local_file}\" \"{remote_file}\""
                 stdout, stderr, returncode = ToolService.run_command(cmd, timeout=60)
                 
                 # 检查是否是只读文件系统错误
@@ -964,8 +1002,9 @@ class ToolService:
             stdout, stderr, returncode = ToolService.run_command(cmd)
             time.sleep(2)
             
+            serial = ToolService.adb_get_device_serial(ip)
             # 3. 尝试获取root权限
-            cmd = f"{ADB_PATH} -s {ip}:5555 root"
+            cmd = f"{ADB_PATH} -s {serial} root"
             stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
             time.sleep(3)  # 等待root生效
             
@@ -975,12 +1014,12 @@ class ToolService:
             time.sleep(2)
             
             # 5. 尝试remount
-            cmd = f"{ADB_PATH} -s {ip}:5555 remount"
+            cmd = f"{ADB_PATH} -s {serial} remount"
             stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
             
             # 6. 如果remount失败，尝试使用mount命令
             if returncode != 0 or stderr:
-                cmd = f"{ADB_PATH} -s {ip}:5555 shell \"mount -o remount,rw /system\""
+                cmd = f"{ADB_PATH} -s {serial} shell \"mount -o remount,rw /system\""
                 stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
             
             # 无论是否完全成功，都返回最后一次执行的结果
@@ -1001,7 +1040,8 @@ class ToolService:
         返回:
             tuple: (stdout, stderr, returncode)
         """
-        cmd = f"{ADB_PATH} -s {ip}:5555 shell chmod {permissions} {remote_file}"
+        serial = ToolService.adb_get_device_serial(ip)
+        cmd = f"{ADB_PATH} -s {serial} shell chmod {permissions} {remote_file}"
         return ToolService.run_command(cmd)
     
     @staticmethod
@@ -1036,6 +1076,7 @@ class ToolService:
         """
         is_fast_check = max_retries == 1
         
+        serial = ToolService.adb_get_device_serial(ip)
         for attempt in range(max_retries):
             try:
                 # 先准备连接 - 快速检查模式下简化处理
@@ -1056,7 +1097,7 @@ class ToolService:
                     return False
                 
                 # 检查文件
-                cmd = f"{ADB_PATH} -s {ip}:5555 shell ls -l {remote_file}"
+                cmd = f"{ADB_PATH} -s {serial} shell ls -l {remote_file}"
                 stdout, stderr, returncode = ToolService.run_command(cmd, timeout=5 if is_fast_check else 10)
                 
                 if returncode == 0 and not stderr and "No such" not in stdout:
