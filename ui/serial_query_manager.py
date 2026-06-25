@@ -144,7 +144,7 @@ class SerialQueryManager(QThread):
             self.finished_signal.emit(self.query_count[0])
             
         except Exception as e:
-            self.error_signal.emit(f"串行查询管理器出错: {str(e)}")
+            self.error_signal.emit("Unknown", f"串行查询管理器出错: {str(e)}")
     
     def stop(self):
         """停止执行"""
