@@ -21,7 +21,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pylint==4.0.8
+          # tests/ 目录 import pytest，必须一并安装，否则 pylint 报 E0401
           pip install -r requirements.txt
+          pip install pytest
       # 阶段目标：先只拦截 E/F 级错误（语法、未定义名称等），逐步收紧
       - name: Analysing the code with pylint (errors only)
         run: |

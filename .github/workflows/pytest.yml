@@ -27,4 +27,7 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
       - name: Run unit tests
-        run: python -m pytest tests -q --basetemp=temp_work/pytest
+        run: |
+          # pytest 的 --basetemp 不会创建缺失的父目录，必须先建好
+          mkdir -p temp_work/pytest
+          python -m pytest tests -q --basetemp=temp_work/pytest
