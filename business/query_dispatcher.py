@@ -1,8 +1,25 @@
 """查询/操作策略分发表（无 Qt 依赖，便于单测）。"""
 
 from config import get_device_remote_path
+from service.query_engine import query_all
 
 ALL_QUERY_KEYS = ["time", "boot_time", "start_count", "sum_switch"]
+
+
+def write_switch_csv(switch_log_file, csv_lock, query_count,
+                     device_id, switch_time, network_time):
+    """把一行开关机次数追加进 CSV（有锁时加锁；无文件则跳过）。"""
+    if switch_log_file is None:
+        return
+    if csv_lock is not None:
+        with csv_lock:
+            if query_count is not None:
+                query_count[0] += 1
+            switch_log_file.write(f"{device_id},{switch_time},{network_time}\n")
+    else:
+        if query_count is not None:
+            query_count[0] += 1
+        switch_log_file.write(f"{device_id},{switch_time},{network_time}\n")
 
 
 def build_query_dispatch(monitor_service, device_id, ip, password, system_type,
@@ -37,16 +54,8 @@ def build_query_dispatch(monitor_service, device_id, ip, password, system_type,
             ip, password, device_id, path
         )
         if success:
-            if switch_log_file is not None:
-                if csv_lock is not None:
-                    with csv_lock:
-                        if query_count is not None:
-                            query_count[0] += 1
-                        switch_log_file.write(f"{device_id},{switch_time},{network_time}\n")
-                else:
-                    if query_count is not None:
-                        query_count[0] += 1
-                    switch_log_file.write(f"{device_id},{switch_time},{network_time}\n")
+            write_switch_csv(switch_log_file, csv_lock, query_count,
+                             device_id, switch_time, network_time)
             results['sum_switch'] = (
                 f"{device_id} 当前开关机次数为：{switch_time} "
                 f"网络开关机次数为：{network_time}"
@@ -82,7 +91,15 @@ def build_query_dispatch(monitor_service, device_id, ip, password, system_type,
         results['output_log'] = output_log
 
     def _all():
-        pass  # 由 ALL_QUERY_KEYS 控制子处理器调用
+        """「查询全部信息」：交执行引擎统一编排（一次 Get + 一次批量 exec）。
+
+        引擎结果键与逐项 handler 完全一致，故 UI 无需改动；开关机 CSV 由本层写入。
+        """
+        outcome = query_all(monitor_service, device_id, ip, password, system_type)
+        results.update(outcome.results)
+        if outcome.switch_success:
+            write_switch_csv(switch_log_file, csv_lock, query_count,
+                             device_id, outcome.switch_time, outcome.network_time)
 
     return {
         "all": _all,

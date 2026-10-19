@@ -7,7 +7,7 @@ from service.adb_service import ADBService
 from service.adb_device_manager import ADBDeviceManager
 from service.device_utils import is_android_device
 from service.logging_service import get_logger
-from business.query_dispatcher import ALL_QUERY_KEYS, build_query_dispatch
+from business.query_dispatcher import build_query_dispatch
 
 logger = get_logger(__name__)
 
@@ -80,10 +80,7 @@ class SerialQueryManager(QThread):
     STATE_QUERYING = "QUERYING"
     STATE_DONE = "DONE"
     STATE_ERROR = "ERROR"
-    
-    # "查询全部信息" 仅包含以下 4 项查询（明确排除：校时、截图、发送节目、初始化、导出日志、清空次数）
-    ALL_QUERY_KEYS = ALL_QUERY_KEYS
-    
+
     # 保存活跃的设备信息刷新线程引用，防止被 GC 销毁导致 QThread 崩溃
     _active_refreshers = set()
     
@@ -200,10 +197,11 @@ class SerialQueryManager(QThread):
                 query_count=self.query_count,
                 csv_lock=self._csv_lock,
             )
-            dispatch[self.query_type]()
+            # 「查询全部信息」交由执行引擎一次编排；其余类型仍走单项 handler
             if self.query_type == "all":
-                for key in self.ALL_QUERY_KEYS:
-                    dispatch[key]()
+                dispatch["all"]()
+            else:
+                dispatch[self.query_type]()
             
             self._set_state(self.STATE_DONE)
             self.result_signal.emit(device_id, results)
