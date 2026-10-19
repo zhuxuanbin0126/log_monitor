@@ -8,7 +8,9 @@ import time
 from datetime import datetime, timedelta
 import re
 import json
-from config import supported_dev_types, getinfo_path, USE_PYTHON_PASSWORD
+from config import (
+    supported_dev_types, getinfo_path, USE_PYTHON_PASSWORD, USE_PROTOCOL_QUERY,
+)
 import html
 import threading
 import queue
@@ -23,6 +25,7 @@ from .adb_service import ADBService
 from .adb_device_manager import ADBDeviceManager
 from .logging_service import get_logger
 from .password_service import get_password as compute_password
+from .protocol.device_info_query import query_device_info
 
 logger = get_logger(__name__)
              
@@ -44,21 +47,101 @@ class ToolService:
         """执行命令并返回输出，支持超时控制"""
         return run_command(cmd, encoding, timeout)
     @staticmethod
+    def _build_device_info(device_id, ip, password, enable_adb_fallback=True):
+        """组装单台设备的信息字典（设备列表 9 列所需的全部字段）。
+
+        - **Android**：优先**一次协议 Get** 取
+          ``DeviceInfo`` / ``VersionInfo`` / ``NetworkInfo`` / ``Development``
+          —— 一个往返拿全 MAC、设备名、OTA/主版本、ADB 开启情况；
+          协议不可用（不支持/不可达）时才回落原有的 adb/SSH 取数流程。
+        - **Linux**：按约定**只取设备密码**，不再走 SSH ``getdeviceinfo.sh``
+          （既无必要又易失败）。
+
+        Args:
+            enable_adb_fallback: 回落 adb/SSH 时是否顺带尝试开启网络 ADB。
+                ``get_device_info``（刷新设备列表）传 True 保持原行为；
+                ``get_device_list``（监控取列表）传 False，避免每轮都去连 adb。
+        """
+        info = {
+            'mac_address': "N/A",
+            'device_name': "N/A",
+            'system_type': "N/A",
+            'ota_version': "N/A",
+            'main_version': "N/A",
+            'adb_status': "未知",
+        }
+
+        # Linux：只取密码，不查这些（Android 专属）信息
+        if not ToolService.is_android_device(device_id):
+            info['system_type'] = 'Linux'
+            info['adb_status'] = '不支持'
+            return info
+
+        # Android：协议优先（一次 Get）
+        if USE_PROTOCOL_QUERY:
+            try:
+                protocol_info = query_device_info(ip)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.debug("设备 %s 协议设备信息查询异常: %s", device_id, exc)
+                protocol_info = None
+            if protocol_info:
+                info.update(protocol_info)
+                # 把设备端 ADB 配置同步到运行时缓存，供传输层 should_use_adb 判断
+                if info.get('adb_status') in ('开启', '未开启'):
+                    ADBDeviceManager.set_cached_status(device_id, info['adb_status'])
+                logger.info(
+                    "[ToolService] %s 协议取数成功: MAC=%s 名称=%s 主版本=%s OTA=%s ADB=%s(%s)",
+                    device_id, info['mac_address'], info['device_name'],
+                    info['main_version'], info['ota_version'],
+                    info['adb_status'], info.get('adb_detail', ''),
+                )
+                return info
+            logger.info("[ToolService] %s 协议取数不可用，回落 adb/SSH", device_id)
+
+        # 回落：原有 adb/SSH 流程
+        adb_status = '未知'
+        if enable_adb_fallback:
+            try:
+                logger.info("[ToolService] 刷新设备 %s，尝试确保网络 ADB 已开启", device_id)
+                adb_ok, serial = ADBDeviceManager.ensure_adb_connected(ip, password, device_id)
+                adb_status = '开启' if adb_ok else '未开启'
+                logger.info("[ToolService] 设备 %s ADB 状态: %s, serial=%s", device_id, adb_status, serial)
+            except Exception as adb_e:  # pylint: disable=broad-except
+                adb_status = '未开启'
+                logger.warning("[ToolService] 设备 %s 开启 ADB 失败: %s", device_id, adb_e)
+        else:
+            adb_status = ADBDeviceManager.get_cached_status(device_id)
+
+        mac_address, device_name, system_type = ToolService.get_advanced_device_info(
+            device_id, ip, password
+        )
+        ota_version, main_version = ToolService.get_version_info(device_id, ip, password)
+        info.update({
+            'mac_address': mac_address,
+            'device_name': device_name,
+            'system_type': system_type,
+            'ota_version': ota_version,
+            'main_version': main_version,
+            'adb_status': adb_status,
+        })
+        return info
+
+    @staticmethod
     def get_device_list(dev_type="A-B-C-D-H"):
         """
-        调用DeviceId.exe获取设备列表
+        调用DeviceId.exe找到设备后补全信息（Android 协议优先，Linux 仅取密码）
         """
         # 构造grep模式
         pattern = dev_type.replace('-', '|')
-        
+
         # 调用DeviceId.exe
         device_id_exe = ToolService.get_tool_path('DeviceId.exe')
         stdout, stderr, returncode = ToolService.run_command(device_id_exe)
         if stderr:
             logger.warning("DeviceId.exe 错误: %s", stderr)
             return []
-        
-        # 过滤符合模式的设备
+
+        # 过滤符合模式的设备并补全信息
         devices = []
         for line in stdout.split('\n'):
             if line.split('-')[0] not in supported_dev_types:
@@ -70,43 +153,11 @@ class ToolService:
                     device_id = parts[0]
                     ip = parts[1]
                     password = ToolService.get_password(device_id)
-                    # 初始设置为N/A
-                    mac_address = "N/A"
-                    device_name = "N/A"
-                    system_type = "N/A"
-                    
-                    # 尝试获取MAC地址和设备名称
-                    try:
-                        # 使用新的统一接口获取设备信息
-                        mac_address, device_name, system_type = ToolService.get_advanced_device_info(
-                            device_id, ip, password
-                        )
-                    except Exception as e:
-                        logger.warning("获取设备 %s 详细信息时出错: %s", device_id, e)
-                    
-                    # 尝试获取OTA版本和主版本
-                    ota_version = "N/A"
-                    main_version = "N/A"
-                    
-                    try:
-                        ota_version, main_version = ToolService.get_version_info(
-                            device_id, ip, password
-                        )
-                    except Exception as e:
-                        logger.warning("获取设备 %s 版本信息时出错: %s", device_id, e)
-                    
-                    # 将所有设备信息存储为字典
-                    devices.append({
-                        'id': device_id,
-                        'ip': ip,
-                        'password': password,
-                        'mac_address': mac_address,
-                        'device_name': device_name,
-                        'system_type': system_type,
-                        'ota_version': ota_version,
-                        'main_version': main_version,
-                        'adb_status': ADBDeviceManager.get_cached_status(device_id)
-                    })
+                    device_info = {'id': device_id, 'ip': ip, 'password': password}
+                    device_info.update(
+                        ToolService._build_device_info(
+                            device_id, ip, password, enable_adb_fallback=False))
+                    devices.append(device_info)
 
         return devices
 
@@ -257,8 +308,11 @@ class ToolService:
     @staticmethod
     def get_device_info(device_stdout, pattern):
         """
-        调用DeviceId.exe获取设备列表，增加健壮的异常处理。
-        对于 Android 设备，会尝试先开启网络 ADB，再获取详细信息。
+        解析一行设备原始信息并补全设备详情。
+
+        Android 设备优先走协议**一次 Get**（一次往返拿全 MAC / 设备名 / 主版本 /
+        OTA / ADB 开启情况），协议不可用才回落原有的「开启网络 ADB + adb/SSH 取数」；
+        Linux 设备只取设备密码。
         """
         try:
             # 过滤符合模式的设备
@@ -279,46 +333,11 @@ class ToolService:
             ip = parts[1]
             password = ToolService.get_password(device_id)
 
-            # Android 设备：刷新时自动尝试开启网络 ADB
-            adb_status = '未知'
-            if ToolService.is_android_device(device_id):
-                try:
-                    logger.info("[ToolService] 刷新设备 %s，尝试确保网络 ADB 已开启", device_id)
-                    adb_ok, serial = ADBDeviceManager.ensure_adb_connected(ip, password, device_id)
-                    adb_status = '开启' if adb_ok else '未开启'
-                    logger.info("[ToolService] 设备 %s ADB 状态: %s, serial=%s", device_id, adb_status, serial)
-                except Exception as adb_e:
-                    adb_status = '未开启'
-                    logger.warning("[ToolService] 设备 %s 开启 ADB 失败: %s", device_id, adb_e)
-            else:
-                adb_status = '不支持'
-
-            # 获取设备信息
-            mac_address, device_name, system_type = ToolService.get_advanced_device_info(
-                device_id, ip, password
-            )
-
-            # 获取版本信息
-            ota_version, main_version = ToolService.get_version_info(
-                device_id, ip, password
-            )
-
-            # 将所有设备信息存储为字典
-            device_info = {
-                'id': device_id,
-                'ip': ip,
-                'password': password,
-                'mac_address': mac_address,
-                'device_name': device_name,
-                'system_type': system_type,
-                'ota_version': ota_version,
-                'main_version': main_version,
-                'adb_status': adb_status,
-            }
+            device_info = {'id': device_id, 'ip': ip, 'password': password}
+            device_info.update(ToolService._build_device_info(device_id, ip, password))
 
             return device_info
         except Exception as e:
-            import traceback
             logger.exception("处理设备信息时发生严重错误: %s", e)
             return None
     

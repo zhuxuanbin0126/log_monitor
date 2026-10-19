@@ -9,6 +9,7 @@
 - :mod:`service.protocol.client`     TCP 握手与收发（明文 / 加密，串行锁）
 - :mod:`service.protocol.get_query`  Get 报文构造与多帧重组
 - :mod:`service.protocol.command_query`  Command.exec（加密）查询
+- :mod:`service.protocol.device_info_query`  设备信息一次 Get（DeviceInfo/VersionInfo/NetworkInfo/Development）
 - :mod:`service.protocol.set_query`      Set 消息（协议开/关 ADB：Development）
 - :mod:`service.protocol.query_service`  设备状态查询与支持面缓存
 """
@@ -16,6 +17,9 @@
 from .command_query import (
     ExecResult, exec_command, exec_if_supported, extract_exec_result,
     is_protocol_supported, line_count_from_output, message_needs_encryption,
+)
+from .device_info_query import (
+    DEVICE_INFO_KEYS, parse_device_info, parse_development, query_device_info,
 )
 from .envelope import DEFAULT_VERSION, build_envelope, new_uuid
 from .frame import build_frame, parse_multi_frame_response
@@ -35,4 +39,5 @@ __all__ = [
     'is_protocol_supported', 'line_count_from_output', 'message_needs_encryption',
     'set_development', 'enable_wireless_adb', 'disable_wireless_adb',
     'enable_wired_adb', 'enable_all_adb',
+    'DEVICE_INFO_KEYS', 'parse_device_info', 'parse_development', 'query_device_info',
 ]
