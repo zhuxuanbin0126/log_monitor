@@ -129,77 +129,102 @@ class DeviceListView(QWidget):
         """更新设备列表表格"""
         self.devices = list(devices)
         self.device_table.setRowCount(len(self.devices))
-        
-        for row, device_info in enumerate(self.devices):
-            device_id = device_info['id']
-            
-            # 选择框
-            check_item = QTableWidgetItem()
-            check_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            check_item.setCheckState(Qt.Checked if device_id in self.selected_devices else Qt.Unchecked)
-            self.device_table.setItem(row, 0, check_item)
-            
-            # 设备ID
-            id_item = QTableWidgetItem(device_id)
-            id_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 1, id_item)
-            
-            # IP地址
-            ip_item = QTableWidgetItem(device_info['ip'])
-            ip_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 2, ip_item)
-            
-            # 主版本
-            main_version = device_info.get('main_version', 'N/A')
-            main_version_item = QTableWidgetItem(main_version)
-            main_version_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 3, main_version_item)
-            
-            # OTA版本
-            ota_version = device_info.get('ota_version', 'N/A')
-            ota_version_item = QTableWidgetItem(ota_version)
-            ota_version_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 4, ota_version_item)
-            
-            # MAC地址
-            mac_item = QTableWidgetItem(device_info['mac_address'])
-            mac_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 5, mac_item)
-            
-            # 设备密码
-            password_item = QTableWidgetItem(device_info['password'])
-            password_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 6, password_item)
-            
-            # 设备名称
-            name_item = QTableWidgetItem(device_info['device_name'])
-            name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 7, name_item)
 
-            # 系统类型
-            system_type_item = QTableWidgetItem(device_info['system_type'])
-            system_type_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            self.device_table.setItem(row, 8, system_type_item)
-            
-            # ADB开启情况：优先使用 device_info 中的实时状态，回退到缓存
-            adb_status = device_info.get('adb_status', get_adb_status(device_id))
-            adb_item = QTableWidgetItem(adb_status)
-            adb_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            if adb_status == '不支持':
-                adb_item.setForeground(QColor('#888888'))
-            elif adb_status == '开启':
-                adb_item.setForeground(QColor('#27ae60'))
-            elif adb_status == '未开启':
-                adb_item.setForeground(QColor('#e67e22'))
-            self.device_table.setItem(row, 9, adb_item)
-            # 同步回写内存数据
-            self.devices[row]['adb_status'] = adb_status
-        
+        for row, device_info in enumerate(self.devices):
+            self._write_row(row, device_info)
+
         # 保留手动设置的列宽，不自动调整
         # 确保选项列保持较小宽度
         if self.device_table.columnWidth(0) > 60:
             self.device_table.setColumnWidth(0, 60)
         self.device_table.viewport().update()
+
+    def add_or_update_device(self, device_info):
+        """**增量**插入/更新一行设备（按设备ID匹配），返回是否新增。
+
+        供「扫描到设备ID/IP 先显示一行，详情补全后再更新该行」使用；
+        不必等全部设备信息收集完，避免列表长时间空白。
+        """
+        device_id = device_info.get('id')
+        if not device_id:
+            return False
+        for row, existing in enumerate(self.devices):
+            if existing.get('id') == device_id:
+                merged = dict(existing)
+                merged.update(device_info)
+                self.devices[row] = merged
+                self._write_row(row, merged)
+                return False
+        self.devices.append(dict(device_info))
+        self.device_table.setRowCount(len(self.devices))
+        self._write_row(len(self.devices) - 1, self.devices[-1])
+        return True
+
+    def _write_row(self, row, device_info):
+        """把一台设备的信息写入指定行（整表重建与增量更新共用）。"""
+        device_id = device_info['id']
+
+        # 选择框
+        check_item = QTableWidgetItem()
+        check_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+        check_item.setCheckState(Qt.Checked if device_id in self.selected_devices else Qt.Unchecked)
+        self.device_table.setItem(row, 0, check_item)
+
+        # 设备ID
+        id_item = QTableWidgetItem(device_id)
+        id_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.device_table.setItem(row, 1, id_item)
+
+        # IP地址
+        ip_item = QTableWidgetItem(device_info['ip'])
+        ip_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.device_table.setItem(row, 2, ip_item)
+
+        # 主版本
+        main_version = device_info.get('main_version', 'N/A')
+        main_version_item = QTableWidgetItem(main_version)
+        main_version_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.device_table.setItem(row, 3, main_version_item)
+
+        # OTA版本
+        ota_version = device_info.get('ota_version', 'N/A')
+        ota_version_item = QTableWidgetItem(ota_version)
+        ota_version_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.device_table.setItem(row, 4, ota_version_item)
+
+        # MAC地址
+        mac_item = QTableWidgetItem(device_info['mac_address'])
+        mac_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.device_table.setItem(row, 5, mac_item)
+
+        # 设备密码
+        password_item = QTableWidgetItem(device_info['password'])
+        password_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.device_table.setItem(row, 6, password_item)
+
+        # 设备名称
+        name_item = QTableWidgetItem(device_info['device_name'])
+        name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.device_table.setItem(row, 7, name_item)
+
+        # 系统类型
+        system_type_item = QTableWidgetItem(device_info['system_type'])
+        system_type_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.device_table.setItem(row, 8, system_type_item)
+
+        # ADB开启情况：优先使用 device_info 中的实时状态，回退到缓存
+        adb_status = device_info.get('adb_status', get_adb_status(device_id))
+        adb_item = QTableWidgetItem(adb_status)
+        adb_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        if adb_status == '不支持':
+            adb_item.setForeground(QColor('#888888'))
+        elif adb_status == '开启':
+            adb_item.setForeground(QColor('#27ae60'))
+        elif adb_status == '未开启':
+            adb_item.setForeground(QColor('#e67e22'))
+        self.device_table.setItem(row, 9, adb_item)
+        # 同步回写内存数据
+        self.devices[row]['adb_status'] = adb_status
             
     def on_device_selected(self, row, column):
         """设备被选择时的处理"""

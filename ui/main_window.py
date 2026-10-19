@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import (QApplication, QMessageBox, QDialog, QWidget,
                               QScrollArea)
 from datetime import datetime
 import os
+import re
 import shutil
 
 from .base_window import BaseWindow
@@ -119,6 +120,7 @@ class MainWindow(BaseWindow):
         self.refresh_controller.progress.connect(self.control_panel.update_refresh_status)
         self.refresh_controller.devices_ready.connect(self.on_devices_ready)
         self.refresh_controller.device_found.connect(self.on_device_found)
+        self.refresh_controller.device_row_updated.connect(self.on_device_row_updated)
         self.refresh_controller.failed.connect(self.on_refresh_failed)
         self.refresh_controller.finished.connect(self.on_refresh_finished)
 
@@ -950,11 +952,58 @@ class MainWindow(BaseWindow):
         self.enable_adb_worker = None
 
     def on_device_found(self, device_id, ip):
-        """找卡「发现即上报」：先把即时反馈显示出来，设备详情随后补全。"""
+        """找卡「发现即上报」：**立即**插入占位行（先显示设备ID/IP），详情随后补全。
+
+        这样扫描到设备的那一刻表格就有内容，不必等全部设备信息收集完（原先要等
+        十几秒才看到任何一行）。
+        """
         self._discovered_count += 1
         self.control_panel.update_refresh_status(
             f"已发现 {self._discovered_count} 台设备（正在补全信息...）")
         logger.debug("发现设备 %s (%s)", device_id, ip)
+        if not self._is_supported_device(device_id):
+            return
+        if self.devices is None:
+            self.devices = []
+        info = self._placeholder_device(device_id, ip)
+        self.devices.append(info)
+        self.device_list_view.add_or_update_device(info)
+
+    def _is_supported_device(self, device_id):
+        """该设备ID是否既在支持型号内、又匹配当前设备类型筛选（与找卡层同口径）。"""
+        head = device_id.split('-')[0]
+        if head not in supported_dev_types and device_id not in supported_dev_types:
+            return False
+        pattern = self.dev_type.replace('-', '|')
+        return bool(re.match(f'^({pattern})', device_id))
+
+    @staticmethod
+    def _placeholder_device(device_id, ip):
+        """扫描刚发现设备时的占位信息：先给出可确定的 ID/IP/密码，其余标注「查询中」。"""
+        return {
+            'id': device_id,
+            'ip': ip,
+            'password': ToolService.get_password(device_id),
+            'mac_address': '查询中…',
+            'device_name': '查询中…',
+            'system_type': '查询中…',
+            'ota_version': '查询中…',
+            'main_version': '查询中…',
+            'adb_status': '未知',
+        }
+
+    def on_device_row_updated(self, device_info):
+        """单台设备详情补全：**增量**更新表格对应行（无需等全部设备完成）。"""
+        if not device_info or not device_info.get('id'):
+            return
+        self.device_list_view.add_or_update_device(device_info)
+        if self.devices is None:
+            self.devices = []
+        for existing in self.devices:
+            if existing.get('id') == device_info['id']:
+                existing.update(device_info)
+                return
+        self.devices.append(dict(device_info))
 
     def on_devices_ready(self, devices):
         """设备信息收集完成：更新表格与状态栏。"""

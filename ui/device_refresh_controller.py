@@ -16,6 +16,8 @@ class DeviceRefreshController(QObject):
     devices_ready = pyqtSignal(list)
     device_found = pyqtSignal(str, str)
     """找卡过程中「发现即上报」``(device_id, ip)``（仅新 UDP 通道提供）。"""
+    device_row_updated = pyqtSignal(dict)
+    """单台设备详情补全完成即上报（用于**增量**更新表格行，不必等全部设备）。"""
     failed = pyqtSignal(str)
     finished = pyqtSignal()
 
@@ -110,6 +112,8 @@ class DeviceRefreshController(QObject):
     def _on_device_info(self, device_info) -> None:
         if device_info:
             self._devices.append(device_info)
+            # 增量更新：每台设备详情到位就立即上报，不必等 allTasksCompleted
+            self.device_row_updated.emit(device_info)
 
     def _on_all_tasks_completed(self) -> None:
         self._stop_manager()
