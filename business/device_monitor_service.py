@@ -10,13 +10,18 @@ from service.data_processing_service import DataProcessingService
 from service.file_service import FileService
 from config import (
     get_base_dir, time_diff_threshold, daily_time_diff_threshold,
-    tool_path, program_path, LOG_DIR,
+    tool_path, program_path, LOG_DIR, USE_PROTOCOL_QUERY,
 )
 from device_config import get_init_config, get_upgrade_config
 from business.screenshot_service import ScreenshotService
 from business.device_log_service import DeviceLogService
 from data_models import DeviceState, OperationResult
 from service.logging_service import get_logger
+from service.protocol import get_device_status
+from service.protocol.command_query import exec_if_supported
+from service.protocol.query_service import (
+    build_device_time_info, build_uptime_info, parse_device_datetime,
+)
 
 logger = get_logger(__name__)
 
@@ -259,10 +264,27 @@ class DeviceMonitorService:
         except Exception as e:
             return OperationResult(False, error=f"{device_id} 更新节目失败 - {str(e)}")
 
+    def _protocol_status(self, ip):
+        """取协议通道状态；未启用或不支持时返回 None（不影响 adb/SSH 回落）。"""
+        if not USE_PROTOCOL_QUERY:
+            return None
+        try:
+            return get_device_status(ip)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("协议查询 %s 失败，回落 adb/SSH: %s", ip, exc)
+            return None
+
     def get_uptime_info(self, ip, password, device_id):
         """
-        获取设备运行时间信息
+        获取设备运行时间信息（协议优先，失败回落 adb/SSH）
         """
+        status = self._protocol_status(ip)
+        if status and status.get("uptime_seconds") is not None:
+            return build_uptime_info(
+                status["uptime_seconds"],
+                parse_device_datetime(status.get("date_time")),
+            )
+
         uptime_script = "uptime"
         
         stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, uptime_script, self.base_dir)
@@ -307,8 +329,14 @@ class DeviceMonitorService:
     
     def get_device_time_info(self, ip, password, device_id):
         """
-        获取设备时间信息
+        获取设备时间信息（协议优先，失败回落 adb/SSH）
         """
+        status = self._protocol_status(ip)
+        if status:
+            device_datetime = parse_device_datetime(status.get("date_time"))
+            if device_datetime is not None:
+                return build_device_time_info(device_datetime)
+
         time_script = "date +%s"
         
         stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, time_script, self.base_dir)
@@ -345,16 +373,23 @@ class DeviceMonitorService:
     
     def get_start_count(self, ip, password, device_id):
         """
-        获取安卓系列播放器启动次数
+        获取安卓系列播放器启动次数（协议优先，失败回落 adb/SSH）
         """
         # 检查设备ID前缀是否为C08L、C16L或D16
         dev_type_prefix = device_id.split('-')[0]
         if dev_type_prefix in ["C08L", "C16L", "D16"]:
             # 这三种设备类型不支持获取播放器启动次数
             return "无法获取"
-        
+
         start_count_script = "getprop huidu.player.start_count"
-        
+
+        # 协议通道：加密 Command.exec（ms 级，无需拉起 adb/SSH）
+        if USE_PROTOCOL_QUERY:
+            protocol_result = exec_if_supported(ip, start_count_script)
+            if (protocol_result is not None and protocol_result.exit_code == 0
+                    and protocol_result.text()):
+                return protocol_result.text()
+
         stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, start_count_script, self.base_dir)
         result = stdout if not stderr else f"Error: {stderr}"
         return result

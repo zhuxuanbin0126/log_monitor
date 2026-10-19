@@ -7,10 +7,13 @@ import os
 import time
 from datetime import datetime
 
+from config import USE_PROTOCOL_QUERY
 from service.tool_service import ToolService
 from service.file_service import FileService
 from service.adb_service import ADBService
 from service.logging_service import get_logger
+from service.protocol import line_count_from_output
+from service.protocol.command_query import exec_if_supported
 
 logger = get_logger(__name__)
 
@@ -19,11 +22,29 @@ class DeviceLogService:
     """设备日志业务服务类，负责开关机计数读取、日志清除和导出"""
 
     @staticmethod
+    def _protocol_line_count(ip, file_path):
+        """协议 exec 统计文件行数（``wc -l``）；文件不存在或失败返回 None。
+
+        开关机次数 = 行数 - 1（首行为表头），与旧 adb/SSH 通道口径一致。
+        """
+        lines = line_count_from_output(exec_if_supported(ip, f"wc -l {file_path}"))
+        if lines is None:
+            return None
+        return max(0, lines - 1)
+
+    @staticmethod
     def sum_switch_count(ip, password, device_id, path):
-        """设备累计开机次数，优化错误处理和重试"""
+        """设备累计开机次数（协议优先，失败回落 adb/SSH）；优化错误处理和重试"""
         try:
             switch_counter_path = f"{path}/swich_counter.csv"
             network_counter_path = f"{path}/network_counter.csv"
+
+            # 协议通道：加密 Command.exec 直接读计数器文件行数（ms 级）
+            if USE_PROTOCOL_QUERY:
+                proto_switch = DeviceLogService._protocol_line_count(ip, switch_counter_path)
+                proto_network = DeviceLogService._protocol_line_count(ip, network_counter_path)
+                if proto_switch is not None or proto_network is not None:
+                    return proto_switch or 0, proto_network or 0, True, None
 
             switch_time = 0
             network_time = 0

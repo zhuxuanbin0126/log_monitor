@@ -4,3 +4,5 @@ pandas==3.0.0
 numpy>=1.26
 openpyxl==3.1.2
 paramiko==3.5.1
+# 协议加密通道（Command.exec 的 AES-128-CBC）直接使用；paramiko 亦依赖它
+cryptography>=3.3
