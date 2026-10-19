@@ -1,7 +1,5 @@
 """查询结果与汇总的展示逻辑。"""
 
-from datetime import datetime, timedelta
-
 QUERY_TYPE_TEXT = {
     "all": "全部",
     "time": "设备时间",
@@ -70,12 +68,9 @@ class QueryResultPresenter:
         return self.is_success(results)
 
     def _present_device_time(self, time_info: dict) -> None:
-        if time_info.get('formatted_remote_time') != 'N/A':
-            utc_time = datetime.strptime(time_info['formatted_remote_time'], '%Y-%m-%d %H:%M:%S')
-            local_time = utc_time + timedelta(hours=8)
-            self._log(f"设备时间: {local_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        else:
-            self._log("设备时间: N/A")
+        # formatted_remote_time 已是北京时区墙钟（见 service.protocol.query_service），
+        # 此处直接展示，不再手动 +8，避免与真实时间相差 8 小时
+        self._log(f"设备时间: {time_info.get('formatted_remote_time', 'N/A')}")
 
         time_diff = int(time_info['time_diff']) if time_info.get('time_diff') != 'N/A' else 0
         self._log(f"时间差: {time_diff} 秒")

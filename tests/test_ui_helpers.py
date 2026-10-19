@@ -9,8 +9,9 @@ from ui.query_result_presenter import QueryResultPresenter
 def test_operation_result_message_via_presenter():
     logs = []
     presenter = QueryResultPresenter(lambda msg, **kw: logs.append(msg), lambda value: value)
+    # formatted_remote_time 已是北京时区墙钟，展示时不再二次 +8
     results = {
-        'device_time': {'formatted_remote_time': '2026-10-19 02:00:00', 'time_diff': 200},
+        'device_time': {'formatted_remote_time': '2026-10-19 10:00:00', 'time_diff': 200},
         'start_count': '3',
     }
     assert presenter.present('H16-00-0001', results) is True

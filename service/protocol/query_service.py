@@ -6,11 +6,13 @@
 取 ``Time`` 与 ``DeviceInfo`` 两个键（一次往返同时拿到设备时间与运行时长），
 并把协议值转换为与 adb/SSH 通道**语义一致**的结果：
 
-- ``Time.dateTime`` 为设备本地（北京时间）墙钟字符串 ``yyyy-MM-dd HH:mm:ss``；
-  adb 通道的 ``date +%s`` 为真 epoch，故这里把北京墙钟按下式换回 epoch：
-  ``epoch = datetime(y,m,d,H,M,S, tz=+08:00).timestamp()``，
-  从而 ``time_diff = epoch - 本机 epoch`` 与 adb 通道完全等价。
-- ``DeviceInfo.uptime`` 为运行秒数（long），直接用于计算启动时间。
+- ``Time.dateTime`` 为设备**真时区墙钟**字符串 ``yyyy-MM-dd HH:mm:ss``，
+  真机实测其取值与本机 UTC 一致（与官方上位机 ``Set.Time`` 下发口径相同），
+  故按 **UTC** 挂时区求 epoch：``epoch = datetime(..., tz=utc).timestamp()``，
+  于是 ``time_diff = 设备真 epoch − 本机真 epoch`` 与 adb 通道完全等价；
+  对外显示的 ``formatted_remote_time`` 一律转成**北京时区**墙钟，UI 直接展示即可。
+- ``DeviceInfo.uptime`` 真机实测为**毫秒**（4 天 7 小时上报 ≈3.7e8），
+  经 :func:`normalize_uptime` 归一为秒后再算启动时间。
 
 支持面缓存：成功的短时缓存（避免同轮询重复往返），失败的长负缓存
 （避免每轮询都对不支持设备白等建连超时）。
@@ -23,7 +25,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from config import (
     PROTOCOL_CONNECT_TIMEOUT, PROTOCOL_PORT, PROTOCOL_RECV_TIMEOUT,
-    PROTOCOL_STATUS_TTL, PROTOCOL_UNSUPPORTED_TTL,
+    PROTOCOL_STATUS_TTL, PROTOCOL_UNSUPPORTED_TTL, PROTOCOL_UPTIME_IN_MS,
 )
 from service.logging_service import get_logger
 
@@ -35,10 +37,16 @@ GET_KEYS = ["Time", "DeviceInfo"]
 """一次 Get 同时取设备时间与运行时长"""
 
 BEIJING_TZ = timezone(timedelta(hours=8))
-"""设备时间口径：北京时间（与官方上位机 Set.Time.dateTime 使用本机北京时间一致）"""
+"""对外显示口径：北京时区（设备墙钟按此渲染给 UI）"""
+
+UTC_TZ = timezone.utc
+"""设备 ``Time.dateTime`` 的解析口径：真机实测为 UTC-0"""
 
 DEVICE_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 """协议设备时间字符串格式"""
+
+MAX_UPTIME_SECONDS = 10 * 365 * 24 * 3600
+"""运行时长合理性上限（秒，10 年）：换算后仍超出则继续按毫秒降级"""
 
 
 def _to_int(value: Any) -> Optional[int]:
@@ -57,15 +65,38 @@ def _to_int(value: Any) -> Optional[int]:
     return None
 
 
+def normalize_uptime(raw: Any,
+                     unit_ms: bool = PROTOCOL_UPTIME_IN_MS) -> Optional[int]:
+    """把协议上报的运行时长归一为**秒**；非法值返回 None。
+
+    真机实测 ``DeviceInfo.uptime`` 为毫秒（设备开机 4 天 7 小时上报 ≈3.7e8），
+    若不换算会得到「4290 天」这种天文数字。单位由 ``config.PROTOCOL_UPTIME_IN_MS``
+    决定（默认毫秒）；换算后仍超出合理性上限时继续降级，容忍更大单位。
+    """
+    value = _to_int(raw)
+    if value is None or value < 0:
+        return None
+    if unit_ms:
+        value //= 1000
+        while value > MAX_UPTIME_SECONDS:
+            value //= 1000
+    return max(0, value)
+
+
 def parse_device_datetime(text: Any) -> Optional[datetime]:
-    """解析设备时间字符串（北京时间）为带时区 datetime；失败返回 None。"""
+    """解析设备时间字符串为带时区 datetime；失败返回 None。
+
+    真机实测 ``Time.dateTime`` 为 **UTC-0** 墙钟（与官方上位机 ``Set.Time``
+    下发的 ``dateTime`` 口径一致），故按 UTC 挂时区；若按北京时间解读会导致
+    UI 显示比真实时间少 8 小时。
+    """
     if not isinstance(text, str):
         return None
     try:
         naive = datetime.strptime(text.strip(), DEVICE_TIME_FORMAT)
     except ValueError:
         return None
-    return naive.replace(tzinfo=BEIJING_TZ)
+    return naive.replace(tzinfo=UTC_TZ)
 
 
 def build_uptime_info(uptime_seconds: int,
@@ -90,7 +121,8 @@ def build_uptime_info(uptime_seconds: int,
         formatted += f"{hours}时"
     formatted += f"{minutes}分"
 
-    current_time = (device_datetime.strftime("%H:%M:%S")
+    # 设备时间一律渲染为北京时区（无论协议上报的是 UTC 还是已带时区）
+    current_time = (device_datetime.astimezone(BEIJING_TZ).strftime("%H:%M:%S")
                     if device_datetime is not None else "N/A")
     now = now or datetime.now()
     return {
@@ -110,17 +142,18 @@ def build_uptime_info(uptime_seconds: int,
 def build_device_time_info(device_datetime: datetime,
                            now: Optional[datetime] = None
                            ) -> Tuple[str, int]:
-    """由设备时间（北京时间）算出 ``(formatted_remote_time, time_diff)``。
+    """由设备时间算出 ``(formatted_remote_time, time_diff)``。
 
-    与 adb/SSH 通道语义一致：``formatted_remote_time`` 为 UTC 墙钟字符串，
-    ``time_diff`` = 设备真 epoch − 本机真 epoch（秒）。
+    与 adb/SSH 通道语义一致：``formatted_remote_time`` 为**北京时区**墙钟字符串
+    （UI 直接展示，无需再手动 +8），``time_diff`` = 设备真 epoch − 本机真 epoch（秒）。
     """
     now = now or datetime.now()
     remote_epoch = int(device_datetime.timestamp())
     local_epoch = int(now.timestamp())
-    formatted = datetime.fromtimestamp(remote_epoch, tz=timezone.utc).strftime(
+    formatted = datetime.fromtimestamp(remote_epoch, tz=BEIJING_TZ).strftime(
         DEVICE_TIME_FORMAT)
     return formatted, remote_epoch - local_epoch
+
 
 
 _MISS = object()
@@ -196,10 +229,12 @@ class ProtocolQueryService:
             return None
         time_cfg = reply_data.get("Time")
         device_cfg = reply_data.get("DeviceInfo")
+        raw_uptime = device_cfg.get("uptime") if isinstance(device_cfg, dict) else None
+        uptime_seconds = normalize_uptime(raw_uptime)
+        logger.debug("设备 %s 协议运行时长: 原始=%r -> %r 秒", host, raw_uptime, uptime_seconds)
         return {
             "date_time": time_cfg.get("dateTime") if isinstance(time_cfg, dict) else None,
-            "uptime_seconds": (_to_int(device_cfg.get("uptime"))
-                               if isinstance(device_cfg, dict) else None),
+            "uptime_seconds": uptime_seconds,
         }
 
     def is_supported(self, host: str) -> bool:

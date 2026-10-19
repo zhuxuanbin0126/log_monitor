@@ -20,7 +20,7 @@ from service.logging_service import get_logger
 from service.protocol import get_device_status
 from service.protocol.command_query import exec_if_supported
 from service.protocol.query_service import (
-    build_device_time_info, build_uptime_info, parse_device_datetime,
+    build_device_time_info, build_uptime_info, parse_device_datetime, BEIJING_TZ,
 )
 
 logger = get_logger(__name__)
@@ -355,8 +355,9 @@ class DeviceMonitorService:
                 if re.match(r'^[0-9]+$', date_result):
                     remote_time = int(date_result)
                     time_diff = remote_time - local_time
-                    # 将UTC时间戳转换为年月日时分秒格式
-                    formatted_remote_time = datetime.utcfromtimestamp(remote_time).strftime('%Y-%m-%d %H:%M:%S')
+                    # 统一按北京时区渲染（UI 直接展示，无需再 +8）
+                    formatted_remote_time = datetime.fromtimestamp(
+                        remote_time, tz=BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')
             except ValueError as e:
                 remote_time = "N/A"
                 time_diff = "N/A"
@@ -457,16 +458,10 @@ class DeviceMonitorService:
         self._write_log_to_file('uptime', entry)
 
     def _write_cardtime_log(self, device_id, ip, formatted_remote_time, time_diff):
-        if formatted_remote_time != "N/A":
-            try:
-                remote_dt = datetime.strptime(formatted_remote_time, '%Y-%m-%d %H:%M:%S')
-                adjusted = (remote_dt + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
-                entry = f"{device_id},{ip},{adjusted},{time_diff}s\n"
-            except ValueError:
-                entry = f"{device_id},{ip},{formatted_remote_time},{time_diff}s\n"
-        else:
-            entry = f"{device_id},{ip},{formatted_remote_time},{time_diff}s\n"
+        # formatted_remote_time 已是北京时区墙钟，直接落盘，不再二次 +8
+        entry = f"{device_id},{ip},{formatted_remote_time},{time_diff}s\n"
         self._write_log_to_file('cardtime', entry)
+
 
     def _write_startcount_log(self, device_id, ip, start_count):
         entry = f"{device_id},{ip},{start_count}\n"

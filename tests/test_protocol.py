@@ -20,8 +20,8 @@ from service.protocol.get_query import (
     build_get_message, extract_reply_data, query_keys, reassemble_get_frames,
 )
 from service.protocol.query_service import (
-    BEIJING_TZ, ProtocolQueryService, build_device_time_info, build_uptime_info,
-    parse_device_datetime,
+    BEIJING_TZ, UTC_TZ, ProtocolQueryService, build_device_time_info,
+    build_uptime_info, normalize_uptime, parse_device_datetime,
 )
 
 
@@ -125,10 +125,11 @@ def test_extract_reply_data_rules():
 
 # ---------------------------------------------------------------- 状态转换
 
-def test_parse_device_datetime():
+def test_parse_device_datetime_is_utc():
+    # 真机实测 Time.dateTime 为 UTC-0 墙钟（与官方上位机 Set.Time 下发口径一致）
     parsed = parse_device_datetime("2026-10-19 18:30:05")
     assert parsed is not None
-    assert parsed.utcoffset() == timedelta(hours=8)
+    assert parsed.utcoffset() == timedelta(0)
     assert (parsed.year, parsed.hour, parsed.minute) == (2026, 18, 30)
     assert parse_device_datetime("not-a-date") is None
     assert parse_device_datetime(None) is None
@@ -158,7 +159,26 @@ def test_build_device_time_info_semantics():
     device_dt = datetime(2026, 10, 19, 19, 0, 0, tzinfo=BEIJING_TZ)
     formatted, diff = build_device_time_info(device_dt, now=now)
     assert diff == 3600                      # 设备快 1 小时
-    assert formatted == "2026-10-19 11:00:00"  # UTC 墙钟（与 adb 通道一致）
+    assert formatted == "2026-10-19 19:00:00"  # 北京时区墙钟（UI 直接展示）
+
+
+def test_build_device_time_info_converts_utc_to_beijing():
+    # 设备上报 2026-10-19 13:54:47（UTC）→ 北京时区应为 21:54:47
+    device_dt = datetime(2026, 10, 19, 13, 54, 47, tzinfo=UTC_TZ)
+    formatted, diff = build_device_time_info(
+        device_dt, now=datetime(2026, 10, 19, 13, 54, 47, tzinfo=UTC_TZ))
+    assert formatted == "2026-10-19 21:54:47"
+    assert diff == 0
+
+
+def test_normalize_uptime_handles_milliseconds():
+    # 真机实测：开机 4 天 7 小时上报 ≈3.7e8（毫秒），按秒解读会得到 4290 天
+    assert normalize_uptime(370709940) == 370709
+    assert normalize_uptime("3600000") == 3600
+    # 单位开关可切换：按秒上报的设备需显式关闭
+    assert normalize_uptime(370709, unit_ms=False) == 370709
+    assert normalize_uptime(None) is None
+    assert normalize_uptime(-1) is None
 
 
 # ---------------------------------------------------------------- 回环假设备
@@ -256,7 +276,7 @@ def test_protocol_query_service_success_cache(monkeypatch):
         calls.append(host)
         return {"module": "Get", "reply": {"result": "kSuccess", "data": {
             "Time": {"dateTime": "2026-10-19 18:30:05"},
-            "DeviceInfo": {"uptime": 3600}}}}
+            "DeviceInfo": {"uptime": 3600000}}}}
 
     monkeypatch.setattr(qs, "query_keys", fake_query)
     service = ProtocolQueryService()
@@ -312,7 +332,7 @@ def test_protocol_query_service_dedups_concurrent_same_host(monkeypatch):
         release.wait(timeout=3.0)
         return {"module": "Get", "reply": {"result": "kSuccess", "data": {
             "Time": {"dateTime": "2026-10-19 18:30:05"},
-            "DeviceInfo": {"uptime": 60}}}}
+            "DeviceInfo": {"uptime": 60000}}}}
 
     monkeypatch.setattr(qs, "query_keys", fake_query)
     service = ProtocolQueryService()
