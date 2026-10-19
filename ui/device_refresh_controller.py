@@ -1,10 +1,12 @@
-"""设备列表刷新控制器：封装扫描线程与设备信息线程池。"""
+"""设备列表刷新控制器：封装找卡线程与设备信息线程池。"""
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
+from config import USE_UDP_DISCOVERY
 from service.logging_service import get_logger
 from service.tool_service import TOOLS_DIR
 from .reflash_device_threadpool import GetDeviceInfoManager, GetDeviceListThread
+from .workers.discovery_worker import DiscoveryThread
 
 
 class DeviceRefreshController(QObject):
@@ -23,18 +25,34 @@ class DeviceRefreshController(QObject):
         self._dev_type = ''
         self._logger = get_logger(__name__)
 
-    def refresh(self, dev_type: str) -> None:
-        """启动一次设备扫描；重复调用会先停止上一轮。"""
+    def refresh(self, dev_type: str, targets=None) -> None:
+        """启动一次设备扫描；重复调用会先停止上一轮。
+
+        Args:
+            dev_type: 设备类型前缀（如 ``A3L`` / ``A-B-C-D-H``）。
+            targets: 手动找卡目标（单 IP / 区间 / CIDR / 混合）。
+                ``None`` 或空表示全网找卡（UDP 广播 / DeviceId.exe）。
+        """
         self.stop()
         self._dev_type = dev_type
         self._devices = []
 
-        self._thread = GetDeviceListThread(dev_type=dev_type, tools_dir=TOOLS_DIR, timeout=60)
+        self._thread = self._create_thread(dev_type, targets)
         self._thread.progress_signal.connect(self.progress)
         self._thread.raw_list_signal.connect(self._on_raw_list)
         self._thread.error_signal.connect(self._on_error)
         self._thread.finished_signal.connect(self._on_thread_finished)
         self._thread.start()
+
+    def _create_thread(self, dev_type: str, targets):
+        """按找卡开关选择新（UDP）或旧（DeviceId.exe）通道；手动找卡仅新通道支持。"""
+        if USE_UDP_DISCOVERY:
+            return DiscoveryThread(dev_type=dev_type, targets=targets or None, timeout=60)
+
+        if targets:
+            self._logger.warning(
+                "已配置手动找卡目标 %s，但当前使用 DeviceId.exe 通道，目标被忽略", targets)
+        return GetDeviceListThread(dev_type=dev_type, tools_dir=TOOLS_DIR, timeout=60)
 
     def stop(self) -> None:
         """停止扫描与线程池。"""

@@ -114,6 +114,52 @@ def get_device_list_pattern(dev_type):
 
 
 # ============================================================
+# 设备发现（找卡）配置
+# ============================================================
+
+USE_UDP_DISCOVERY = True
+"""找卡方式开关：True 走 UDP 9527 协议找卡；False 回退旧的 DeviceId.exe 扫描"""
+
+UDP_DISCOVERY_PORT = 9527
+"""设备找卡 UDP 端口（DeviceId.exe / MagicCatRelay 均使用）"""
+
+UDP_PROBE_PACKET = bytes([0x00, 0x00, 0x00, 0x02, 0x01, 0x00])
+"""广播探测包（6 字节，抓包确认）"""
+
+UDP_PROBE_INTERVAL = 1.0
+"""探测包重发间隔（秒）：设备应答可能延迟数秒，需周期性重发"""
+
+UDP_QUIET_WINDOW = 3.5
+"""收敛静默窗口（秒）：最后一台设备后仍需静默等待的时长"""
+
+UDP_MIN_SCAN_SECONDS = 6.0
+"""最短扫描时长（秒）：防止快设备先应答就过早收尾"""
+
+UDP_SCAN_TIMEOUT = 30.0
+"""扫描总超时（秒，上限保护）"""
+
+PROBE_MAX_TARGETS = 1024
+"""手动找卡目标 IP 数量上限（防止 /16 大区间跑成数分钟）"""
+
+PROBE_CONCURRENCY = 48
+"""手动找卡单播探测并发度"""
+
+PROBE_PER_TARGET_TIMEOUT = 2.0
+"""手动找卡逐 IP 单播等待响应超时（秒）"""
+
+PROBE_BROADCAST_MOPUP_TIMEOUT = 8.0
+"""手动找卡中广播兜底的总超时（秒，短窗口加速收尾）"""
+
+PROBE_BROADCAST_MOPUP_MIN_SCAN = 1.5
+"""手动找卡中广播兜底的最短扫描时长（秒）"""
+
+PROBE_BROADCAST_MOPUP_QUIET = 1.5
+"""手动找卡中广播兜底的静默收敛窗口（秒）"""
+
+PROBE_BROADCAST_MOPUP_INTERVAL = 0.5
+"""手动找卡中广播兜底的探测重发间隔（秒）"""
+
+# ============================================================
 # 系统类型与远程路径映射
 # ============================================================
 

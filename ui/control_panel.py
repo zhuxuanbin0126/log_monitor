@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-    QPushButton, QGroupBox, QSpinBox, QCheckBox, QFileDialog
+    QPushButton, QGroupBox, QSpinBox, QCheckBox, QFileDialog, QLineEdit
 )
 from PyQt5.QtCore import pyqtSignal
 from config import default_dev_type, supported_dev_types
@@ -11,6 +11,7 @@ class ControlPanel(QWidget):
     # 定义信号
     refresh_clicked = pyqtSignal()
     dev_type_changed = pyqtSignal(str)
+    manual_find_clicked = pyqtSignal(str)
     start_monitor_clicked = pyqtSignal(int, bool, bool, bool, bool, str, bool)
     stop_monitor_clicked = pyqtSignal()
     query_selected_clicked = pyqtSignal(str)
@@ -51,6 +52,15 @@ class ControlPanel(QWidget):
         self.refresh_button = QPushButton("刷新设备列表")
         self.refresh_button.clicked.connect(self.refresh_clicked.emit)
         
+        # 手动找卡：输入 单IP / 区间 / CIDR（如 192.168.1.10 或 192.168.1.1-192.168.1.50）
+        self.manual_targets_label = QLabel("手动找卡:")
+        self.manual_targets_edit = QLineEdit()
+        self.manual_targets_edit.setPlaceholderText("IP / 区间 / CIDR，如 192.168.1.10")
+        self.manual_targets_edit.setMinimumWidth(200)
+        self.manual_targets_edit.returnPressed.connect(self.on_manual_find_clicked)
+        self.manual_find_button = QPushButton("手动找卡")
+        self.manual_find_button.clicked.connect(self.on_manual_find_clicked)
+        
         # 添加刷新状态显示标签
         self.refresh_status_label = QLabel("就绪")
         self.refresh_status_label.setStyleSheet("color: green;")
@@ -59,6 +69,9 @@ class ControlPanel(QWidget):
         top_row_layout.addWidget(self.dev_type_label)
         top_row_layout.addWidget(self.dev_type_combo)
         top_row_layout.addWidget(self.refresh_button)
+        top_row_layout.addWidget(self.manual_targets_label)
+        top_row_layout.addWidget(self.manual_targets_edit)
+        top_row_layout.addWidget(self.manual_find_button)
         top_row_layout.addWidget(self.refresh_status_label)
         top_row_layout.addStretch()
         
@@ -187,6 +200,14 @@ class ControlPanel(QWidget):
         self.dev_type = text
         self.dev_type_changed.emit(text)
         
+    def on_manual_find_clicked(self):
+        """手动找卡按钮/回车事件：把输入的目标下发给上层。"""
+        targets = self.manual_targets_edit.text().strip()
+        if not targets:
+            self.update_refresh_status("请输入手动找卡目标（IP / 区间 / CIDR）", is_warning=True)
+            return
+        self.manual_find_clicked.emit(targets)
+        
     def on_start_monitor_clicked(self):
         """开始监控按钮点击事件"""
         delay_time = self.delay_spin.value()
@@ -219,6 +240,8 @@ class ControlPanel(QWidget):
         # 禁用/启用其他控制
         self.refresh_button.setEnabled(not is_monitoring)
         self.dev_type_combo.setEnabled(not is_monitoring)
+        self.manual_targets_edit.setEnabled(not is_monitoring)
+        self.manual_find_button.setEnabled(not is_monitoring)
         
         # 禁用/启用监控控制区域的所有按钮和复选框
         self.delay_spin.setEnabled(not is_monitoring)

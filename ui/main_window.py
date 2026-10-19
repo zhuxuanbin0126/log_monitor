@@ -91,6 +91,7 @@ class MainWindow(BaseWindow):
         """连接信号与槽"""
         # 控制面板信号连接
         self.control_panel.refresh_button.clicked.connect(self.refresh_device_list)
+        self.control_panel.manual_find_clicked.connect(self.manual_find_device_list)
         self.control_panel.dev_type_combo.currentTextChanged.connect(self.on_dev_type_changed)
         # 修复：连接到正确的start_monitor_clicked信号，而不是按钮的clicked信号
         self.control_panel.start_monitor_clicked.connect(self.start_monitor)
@@ -867,6 +868,16 @@ class MainWindow(BaseWindow):
             self.refresh_controller.refresh(self.control_panel.dev_type)
         except Exception as e:
             self.log(f"刷新设备列表失败: {str(e)}", is_error=True)
+            self.control_panel.refresh_button.setEnabled(True)
+
+    def manual_find_device_list(self, targets):
+        """手动找卡 - 按输入的 IP/区间/CIDR 定向扫描（广播兜底），异步执行。"""
+        try:
+            self.control_panel.refresh_button.setDisabled(True)
+            self.devices = []
+            self.refresh_controller.refresh(self.control_panel.dev_type, targets)
+        except Exception as e:
+            self.log(f"手动找卡失败: {str(e)}", is_error=True)
             self.control_panel.refresh_button.setEnabled(True)
 
     def on_devices_ready(self, devices):
