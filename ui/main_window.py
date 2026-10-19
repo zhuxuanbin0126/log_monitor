@@ -418,7 +418,8 @@ class MainWindow(BaseWindow):
         return summary
 
     def start_monitor(self, delay_time, monitor_time, monitor_boot, monitor_start_count,
-                       capture_screenshot=False, screenshot_path="./screenshot"):
+                       capture_screenshot=False, screenshot_path="./screenshot",
+                       clear_history=False):
         """开始监控"""
         if len(self.device_list_view.get_devices()) == 0:
             self.log("请先刷新设备列表")
@@ -432,6 +433,11 @@ class MainWindow(BaseWindow):
         if self.monitor_thread and self.monitor_thread.isRunning():
             self.log("监控已经在运行中")
             return
+
+        if clear_history:
+            self.log("正在清除历史监控数据...")
+            self.clear_history_data()
+            self.excel_file = None
 
         # 第一次获取设备信息，检测设备在线情况和可执行性
         self.log("开始第一次获取设备信息，检测设备在线情况...")

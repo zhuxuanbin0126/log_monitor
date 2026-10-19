@@ -37,7 +37,7 @@ ADB_PATH = os.path.join(TOOLS_DIR, 'adb.exe').replace('/', '\\')
 TOOLS_DIR = TOOLS_DIR.replace('/', '\\')
 
 # 定义Android设备类型列表
-ANDROID_DEV_TYPES = ['A3L', 'A4L', 'A5L', 'A6L', 'A7', 'A8', 'B6L', 'B8L', 'C16H', 'H4K', 'H6', 'H8', 'H20']
+ANDROID_DEV_TYPES = ['A3L', 'A4L', 'A5L', 'A6L', 'A7', 'A8', 'B6L', 'B8L', 'C16H', 'H4K', 'H6', 'H8', 'H16', 'H20']
 # 定义Linux设备类型列表
 LINUX_DEV_TYPES = ['C08L', 'C16L', 'D16', 'D36']
 

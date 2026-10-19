@@ -11,7 +11,7 @@ class ControlPanel(QWidget):
     # 定义信号
     refresh_clicked = pyqtSignal()
     dev_type_changed = pyqtSignal(str)
-    start_monitor_clicked = pyqtSignal(int, bool, bool, bool, bool, str)
+    start_monitor_clicked = pyqtSignal(int, bool, bool, bool, bool, str, bool)
     stop_monitor_clicked = pyqtSignal()
     query_selected_clicked = pyqtSignal(str)
     
@@ -93,6 +93,8 @@ class ControlPanel(QWidget):
         self.monitor_start_count_check.setChecked(True)
         self.monitor_screenshot_check = QCheckBox("获取运行画面")
         self.monitor_screenshot_check.setChecked(True)
+        self.clear_history_check = QCheckBox("清除历史数据")
+        self.clear_history_check.setChecked(False)
         
         # 添加截图存储位置自定义按钮
         self.screenshot_path_button = QPushButton("截图存储位置")
@@ -109,6 +111,7 @@ class ControlPanel(QWidget):
         monitor_layout.addWidget(self.monitor_boot_check)
         monitor_layout.addWidget(self.monitor_start_count_check)
         monitor_layout.addWidget(self.monitor_screenshot_check)
+        monitor_layout.addWidget(self.clear_history_check)
         monitor_layout.addWidget(self.screenshot_path_button)
         monitor_layout.addStretch()
         
@@ -192,9 +195,11 @@ class ControlPanel(QWidget):
         monitor_start_count = self.monitor_start_count_check.isChecked()
         capture_screenshot = self.monitor_screenshot_check.isChecked()
         screenshot_path = self.screenshot_path
+        clear_history = self.clear_history_check.isChecked()
         
         self.start_monitor_clicked.emit(
-            delay_time, monitor_time, monitor_boot, monitor_start_count, capture_screenshot, screenshot_path
+            delay_time, monitor_time, monitor_boot, monitor_start_count,
+            capture_screenshot, screenshot_path, clear_history
         )
         
     def validate_delay_input(self):
@@ -221,6 +226,7 @@ class ControlPanel(QWidget):
         self.monitor_boot_check.setEnabled(not is_monitoring)
         self.monitor_start_count_check.setEnabled(not is_monitoring)
         self.monitor_screenshot_check.setEnabled(not is_monitoring)
+        self.clear_history_check.setEnabled(not is_monitoring)
         self.screenshot_path_button.setEnabled(not is_monitoring)
         
         # 禁用/启用查询/控制区域的所有按钮

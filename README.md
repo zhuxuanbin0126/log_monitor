@@ -43,13 +43,19 @@
 ```
 log_monitor/
 ├── service/                       # 服务层 - 基础工具服务
-│   ├── tool_service.py           # 工具服务：命令执行、SSH连接、设备密码获取、ADB操作
+│   ├── tool_service.py           # 工具门面：命令执行、SSH、设备密码、ADB 委托
+│   ├── adb_service.py            # ADB 操作：连接、推送、拉取、MD5、权限
+│   ├── adb_device_manager.py     # ADB 状态管理：分类、缓存、连接池、批量开启
+│   ├── device_utils.py           # 共享工具：命令执行、MD5、设备分类、重试装饰器
 │   ├── data_processing_service.py # 数据处理：运行时间解析、错误消息格式化
 │   └── file_service.py           # 文件服务：日志读写、错误记录、数据持久化
 ├── business/                     # 业务层 - 核心业务逻辑
-│   └── device_monitor_service.py # 设备监控业务：设备状态检查、错误检测、截图功能
+│   ├── device_monitor_service.py # 设备监控业务：状态检查、错误检测、校时、节目发送
+│   ├── device_log_service.py     # 开关机计数、日志清理与导出
+│   └── screenshot_service.py     # 屏幕截图
 ├── ui/                           # 视图层 - 用户界面组件
 │   ├── main_window.py            # 主窗口：协调各组件、错误处理、监控控制
+│   ├── dialogs/                  # 确认对话框（开关机初始化、发送节目）
 │   ├── device_list_view.py       # 设备列表视图：设备展示和选择
 │   ├── control_panel.py          # 控制面板：监控设置和设备类型选择
 │   ├── result_display_view.py    # 结果显示视图：彩色日志显示
@@ -70,17 +76,17 @@ log_monitor/
 │   ├── excel/                    # Excel文件目录
 │   └── screenshot/               # 截图文件目录
 ├── config.py                     # 配置文件：路径、阈值、设备类型配置
+├── device_config.py              # 设备型号配置加载（device_info.json）
+├── data_models.py                # 数据模型：DeviceState / MonitorConfig / OperationResult
 ├── main.py                       # 应用程序入口
-├── requirements.txt              # Python依赖包
-├── build_simple.bat              # Windows打包脚本
-├── DeviceId.exe                  # 设备发现工具
-├── bash.exe                      # Bash命令行工具
-├── grep.exe                      # 文本搜索工具
-├── plink.exe                     # SSH连接工具
-├── pscp.exe                      # 文件传输工具
-├── adb.exe                       # Android调试桥工具
-├── AdbWinApi.dll                 # ADB Windows API
-├── AdbWinUsbApi.dll              # ADB Windows USB API
+├── requirements.txt              # Python 运行依赖
+├── requirements-dev.txt          # 测试与静态检查依赖
+├── package.bat                   # Windows 一键打包脚本
+├── log_monitor.spec              # PyInstaller 打包配置（唯一真源）
+├── tools/                        # 外部工具与设备端脚本（bin/ 为运行必需）
+├── tests/                        # pytest 单元测试
+├── .github/workflows/            # CI：pytest + pylint
+├── CHANGELOG.md                  # 版本变更记录
 └── README.md                     # 项目说明文档
 ```
 
@@ -139,7 +145,7 @@ python main.py
 ### 方式二：打包分发（生产环境）
 ```bash
 # 使用提供的打包脚本（推荐）
-build.bat
+package.bat
 
 # 或手动使用PyInstaller
 pip install pyinstaller
