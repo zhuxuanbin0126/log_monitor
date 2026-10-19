@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from setuptools import setup, find_packages
 import os
+
+from setuptools import find_packages, setup
+
 from config import VERSION
 
-# 获取当前目录下的所有文件
-def get_data_files():
-    data_files = []
-    
-    # 添加可执行文件
-    exe_files = ['DeviceId.exe', 'bash.exe', 'grep.exe', 'plink.exe','adb.exe', 'pscp.exe', 'AdbWinUsbApi.dll', 'AdbWinApi.dll','HPassWord.exe']
-    for exe_file in exe_files:
-        if os.path.exists(exe_file):
-            data_files.append(exe_file)
-    
-    # 添加配置文件
-    config_files = ['config.py', 'requirements.txt']
-    for config_file in config_files:
-        if os.path.exists(config_file):
-            data_files.append(config_file)
-    
-    return data_files
+ROOT = os.path.dirname(os.path.abspath(__file__))
+
+BIN_TOOLS = [
+    'DeviceId.exe', 'bash.exe', 'grep.exe', 'plink.exe', 'pscp.exe',
+    'adb.exe', 'AdbWinUsbApi.dll', 'AdbWinApi.dll', 'HPassword.exe',
+    'HSDKCmd.exe', 'scrcpy.dll',
+]
+SCRIPT_TOOLS = [
+    'getdeviceinfo.sh', 'boot_counter.sh', 'run.sh', 'ntpdate',
+    'init.huidu.rc', 'init.rk3399.rc', 'init.rk356x.rc', 'init.rk3588.rc',
+]
+
+
+def _existing(relative_dir, names):
+    return [
+        os.path.join(relative_dir, name)
+        for name in names
+        if os.path.exists(os.path.join(ROOT, relative_dir, name))
+    ]
+
 
 setup(
     name="log_monitor",
@@ -35,12 +40,18 @@ setup(
         '': ['*.exe', '*.txt', '*.py', '*.md'],
     },
     data_files=[
-        ('', get_data_files()),
+        ('tools/bin', _existing('tools/bin', BIN_TOOLS)),
+        ('tools', _existing('tools', SCRIPT_TOOLS)),
+        ('', [
+            path for path in ('config.py', 'device_info.json', 'requirements.txt', 'version_info.txt')
+            if os.path.exists(os.path.join(ROOT, path))
+        ]),
     ],
     install_requires=[
         'PyQt5==5.15.9',
         'pandas==2.1.0',
         'openpyxl==3.1.2',
+        'paramiko==3.5.1',
     ],
     entry_points={
         'console_scripts': [
@@ -48,16 +59,13 @@ setup(
         ],
         'gui_scripts': [
             'log-monitor-gui=main:main',
-        ]
+        ],
     },
     classifiers=[
         'Development Status :: 4 - Beta',
         'Intended Audience :: System Administrators',
         'License :: OSI Approved :: MIT License',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.8',
-        'Programming Language :: Python :: 3.9',
-        'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',
         'Operating System :: Microsoft :: Windows',
     ],

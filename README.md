@@ -47,21 +47,27 @@ log_monitor/
 │   ├── adb_service.py            # ADB 操作：连接、推送、拉取、MD5、权限
 │   ├── adb_device_manager.py     # ADB 状态管理：分类、缓存、连接池、批量开启
 │   ├── device_utils.py           # 共享工具：命令执行、MD5、设备分类、重试装饰器
+│   ├── transports.py             # 传输层抽象：ADB / SSH 可替换实现
+│   ├── logging_service.py        # 统一日志：文件轮转 + 开发态控制台
 │   ├── data_processing_service.py # 数据处理：运行时间解析、错误消息格式化
 │   └── file_service.py           # 文件服务：日志读写、错误记录、数据持久化
 ├── business/                     # 业务层 - 核心业务逻辑
 │   ├── device_monitor_service.py # 设备监控业务：状态检查、错误检测、校时、节目发送
 │   ├── device_log_service.py     # 开关机计数、日志清理与导出
-│   └── screenshot_service.py     # 屏幕截图
+│   ├── screenshot_service.py     # 屏幕截图
+│   └── query_dispatcher.py       # 查询/操作策略分发表
 ├── ui/                           # 视图层 - 用户界面组件
-│   ├── main_window.py            # 主窗口：协调各组件、错误处理、监控控制
+│   ├── main_window.py            # 主窗口：组装视图与信号路由
+│   ├── device_refresh_controller.py # 设备刷新控制器
+│   ├── error_log_manager.py      # 错误分类、落盘与查看
+│   ├── excel_exporter.py         # 监控结果 Excel 导出
+│   ├── query_result_presenter.py # 查询结果与汇总展示
 │   ├── dialogs/                  # 确认对话框（开关机初始化、发送节目）
 │   ├── device_list_view.py       # 设备列表视图：设备展示和选择
 │   ├── control_panel.py          # 控制面板：监控设置和设备类型选择
 │   ├── result_display_view.py    # 结果显示视图：彩色日志显示
 │   ├── monitor_thread.py         # 监控线程：后台监控任务
-│   ├── query_thread.py           # 查询线程：单个设备查询任务
-│   ├── reflash_device_thread.py  # 设备刷新线程
+│   ├── serial_query_manager.py   # 串行/并行查询管理器
 │   ├── reflash_device_threadpool.py # 设备刷新线程池
 │   └── base_window.py            # 基础窗口类
 ├── tools/                         # 工具脚本和配置文件
@@ -83,9 +89,8 @@ log_monitor/
 ├── requirements-dev.txt          # 测试与静态检查依赖
 ├── package.bat                   # Windows 一键打包脚本
 ├── log_monitor.spec              # PyInstaller 打包配置（唯一真源）
-├── tools/                        # 外部工具与设备端脚本（bin/ 为运行必需）
 ├── tests/                        # pytest 单元测试
-├── .github/workflows/            # CI：pytest + pylint
+├── .github/workflows/            # CI：pytest + pylint + release
 ├── CHANGELOG.md                  # 版本变更记录
 └── README.md                     # 项目说明文档
 ```
@@ -100,17 +105,25 @@ log_monitor/
 ### 多线程设计
 - **主线程**：UI渲染和用户交互
 - **监控线程**：后台设备监控任务
-- **查询线程**：单个设备查询任务
+- **查询管理器**：ADB 设备并行、SSH 设备串行，避免连接冲突
 
 ### 错误处理机制
-- 结构化错误信息
+- 结构化错误信息（`OperationResult`）
 - 错误类型自动识别
 - 错误日志自动记录和查看
+- 统一日志文件 `output/logs/app.log`（5 MB × 3 轮转）
+
+### 工程化与发布
+```bash
+python -m pytest tests -q                  # 单元测试
+python tools/build_release.py --check-only # 版本一致性校验
+python tools/build_release.py              # 打包 + SHA256 + zip
+```
 
 ## 📋 系统要求
 
 ### 开发环境
-- Python 3.8+
+- Python 3.11（推荐，CI 同版本）
 - Windows 7/10/11
 - 网络连接（用于设备通信）
 
@@ -120,12 +133,13 @@ log_monitor/
 PyQt5==5.15.9    # 图形界面框架
 pandas==2.1.0    # 数据处理和Excel导出
 openpyxl==3.1.2  # Excel文件操作
+paramiko==3.5.1  # SSH（不可用时自动回退 plink）
 
-# 内置工具（已包含在发布包中）
+# 内置工具（位于 tools/bin，随发布包一起分发）
 DeviceId.exe     # 设备发现工具
-bash.exe         # 命令行工具
-grep.exe         # 文本搜索工具
-plink.exe        # SSH连接工具
+adb.exe          # Android 调试桥
+plink.exe        # SSH 连接工具
+pscp.exe         # 文件传输工具
 ```
 
 ## 🚀 快速开始
@@ -133,7 +147,7 @@ plink.exe        # SSH连接工具
 ### 方式一：源码运行（开发模式）
 ```bash
 # 1. 克隆或下载项目
-cd d:\log_monitor
+cd <项目目录>
 
 # 2. 安装Python依赖
 pip install -r requirements.txt
@@ -144,12 +158,12 @@ python main.py
 
 ### 方式二：打包分发（生产环境）
 ```bash
-# 使用提供的打包脚本（推荐）
-package.bat
+# 一键打包 + 校验 + 发布包（推荐）
+python tools/build_release.py
 
-# 或手动使用PyInstaller
+# 或仅调用 PyInstaller（产物在 dist/log_monitor.exe）
 pip install pyinstaller
-pyinstaller --onefile --windowed --add-data "DeviceId.exe;." --add-data "*.exe;." main.py
+pyinstaller log_monitor.spec
 ```
 
 ### 方式三：Python包安装
@@ -222,43 +236,38 @@ log-monitor-gui
 
 ## 🔧 打包部署
 
-### 自动打包
+### 自动打包（推荐）
 ```bash
-# 使用提供的build_simple.bat脚本（推荐）
-build_simple.bat
+# 版本校验 → PyInstaller → release/ 运行时资源 → SHA256SUMS.txt → zip
+python tools/build_release.py
+
+# 只校验版本一致性
+python tools/build_release.py --check-only
+
+# 跳过 zip（仅生成 release 目录）
+python tools/build_release.py --no-zip
 ```
 
-### 手动打包选项
+### 手动打包
 ```bash
-# 单个可执行文件（包含所有依赖）
-pyinstaller --onefile --windowed --add-data "DeviceId.exe;" --add-data "bash.exe;" --add-data "grep.exe;" --add-data "plink.exe;" --add-data "pscp.exe;" --add-data "adb.exe;" --add-data "AdbWinApi.dll;" --add-data "AdbWinUsbApi.dll;" --add-data "config.py;" --hidden-import "pandas" --hidden-import "openpyxl" --hidden-import "PyQt5.QtWidgets" --hidden-import "PyQt5.QtCore" --hidden-import "PyQt5.QtGui" --upx --exclude-module "tkinter" main.py
-
-# 包含控制台窗口（调试模式）
-pyinstaller --onefile --console --add-data "*.exe;" --add-data "*.dll;" main.py
-
-# 生成目录分发（便于调试）
-pyinstaller --onedir --windowed --add-data "*.exe;" --add-data "*.dll;" main.py
+pip install pyinstaller
+pyinstaller log_monitor.spec
 ```
 
 ### 发布包内容
-打包后的release目录包含：
+`release/` 目录包含：
 - `log_monitor.exe`：主应用程序
-- `DeviceId.exe`：设备发现工具
-- `bash.exe`：命令行工具
-- `grep.exe`：文本搜索工具
-- `plink.exe`：SSH连接工具
-- `pscp.exe`：文件传输工具
-- `adb.exe`：Android调试桥工具
-- `AdbWinApi.dll`：ADB Windows API
-- `AdbWinUsbApi.dll`：ADB Windows USB API
-- `config.py`：配置文件
-- `README.md`：说明文档
-- 各设备类型日志目录
+- `tools/bin/`：DeviceId.exe、adb.exe、plink.exe、pscp.exe、HPassword.exe、HSDKCmd.exe 及 DLL
+- `tools/`：设备端脚本（boot_counter.sh、ntpdate、init.*.rc 等）
+- `device_info.json`：设备型号配置
+- `README.md`、`用户手册.md`、`用户手册.pdf`、`CHANGELOG.md`
+- `SHA256SUMS.txt`：逐文件 SHA256 校验清单
+- `log_monitor_vX.Y.Z.W.zip`：完整发布压缩包
 
 ## 🐛 常见问题
 
 ### Q1: 程序无法启动
-**A**: 确保所有.exe工具文件与主程序在同一目录下，特别是adb.exe、AdbWinApi.dll和AdbWinUsbApi.dll
+**A**: 确保 `tools/bin` 目录完整（adb.exe、AdbWinApi.dll、AdbWinUsbApi.dll、DeviceId.exe 等），且与主程序同级。
 
 ### Q2: 设备列表为空
 **A**: 检查DeviceId.exe是否能正常运行，网络连接是否正常，设备是否在线

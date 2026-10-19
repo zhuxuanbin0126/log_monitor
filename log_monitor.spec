@@ -33,7 +33,7 @@ a = Analysis(
         ('version_info.txt', '.'),
         ('device_info.json', '.'),
     ],
-    hiddenimports=['pandas', 'openpyxl', 'PyQt5.QtWidgets', 'PyQt5.QtCore', 'PyQt5.QtGui'],
+    hiddenimports=['pandas', 'openpyxl', 'PyQt5.QtWidgets', 'PyQt5.QtCore', 'PyQt5.QtGui', 'paramiko'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
