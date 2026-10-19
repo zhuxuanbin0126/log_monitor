@@ -25,4 +25,4 @@ jobs:
       # 阶段目标：先只拦截 E/F 级错误（语法、未定义名称等），逐步收紧
       - name: Analysing the code with pylint (errors only)
         run: |
-          python -m pylint --errors-only business service ui tests main.py config.py device_config.py data_models.py
+          python -m pylint --rcfile=.pylintrc --errors-only business service ui tests main.py config.py device_config.py data_models.py

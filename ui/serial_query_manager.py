@@ -1,13 +1,15 @@
-from PyQt5.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
+from PyQt5.QtCore import QThread, pyqtSignal
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import copy
+import threading
 
-from .query_thread import QueryThread
 from service.tool_service import ToolService
 from service.adb_service import ADBService
 from service.adb_device_manager import ADBDeviceManager
 from service.device_utils import is_android_device
-from config import get_device_remote_path
+from service.logging_service import get_logger
+from business.query_dispatcher import ALL_QUERY_KEYS, build_query_dispatch
+
+logger = get_logger(__name__)
 
 
 class _DeviceInfoRefresher(QThread):
@@ -60,7 +62,7 @@ class _DeviceInfoRefresher(QThread):
 
             self.info_ready.emit(self.device_id, info)
         except Exception as e:
-            print(f"[_DeviceInfoRefresher] {self.device_id} 刷新失败: {e}")
+            logger.warning("[_DeviceInfoRefresher] %s 刷新失败: %s", self.device_id, e)
 
 
 class SerialQueryManager(QThread):
@@ -80,7 +82,7 @@ class SerialQueryManager(QThread):
     STATE_ERROR = "ERROR"
     
     # "查询全部信息" 仅包含以下 4 项查询（明确排除：校时、截图、发送节目、初始化、导出日志、清空次数）
-    ALL_QUERY_KEYS = ["time", "boot_time", "start_count", "sum_switch"]
+    ALL_QUERY_KEYS = ALL_QUERY_KEYS
     
     # 保存活跃的设备信息刷新线程引用，防止被 GC 销毁导致 QThread 崩溃
     _active_refreshers = set()
@@ -94,7 +96,7 @@ class SerialQueryManager(QThread):
         self.custom_file_paths = custom_file_paths
         self.query_count = [0]
         self.is_running = True
-        self.mutex = QMutex()
+        self._csv_lock = threading.Lock()
         self._current_device = ""
         
     def _set_state(self, state, device_id=None):
@@ -119,7 +121,10 @@ class SerialQueryManager(QThread):
             for idx, (device_id, ip, password, system_type) in enumerate(ssh_devices):
                 if not self.is_running:
                     break
-                print(f"[串行管理器] 开始处理设备 {idx + 1 + len(adb_devices)}/{total_devices}: {device_id} ({ip})")
+                logger.info(
+                    "[串行管理器] 开始处理设备 %s/%s: %s (%s)",
+                    idx + 1 + len(adb_devices), total_devices, device_id, ip,
+                )
                 self._set_state(self.STATE_CONNECTING, device_id)
                 self.progress_signal.emit(idx + 1 + len(adb_devices), total_devices)
                 self._process_single_device(device_id, ip, password, system_type, needs_adb=False)
@@ -133,15 +138,18 @@ class SerialQueryManager(QThread):
         """并行处理 ADB 设备（每个设备独立 ADB 连接）"""
         adb_count = len(adb_devices)
         completed = 0
+        completed_lock = threading.Lock()
         
         def _handle_adb_device(device_info):
+            nonlocal completed
             device_id, ip, password, system_type = device_info
             try:
                 self._process_single_device(device_id, ip, password, system_type, needs_adb=True)
             finally:
-                nonlocal completed
-                completed += 1
-                self.progress_signal.emit(completed, total_devices)
+                with completed_lock:
+                    completed += 1
+                    current = completed
+                self.progress_signal.emit(current, total_devices)
         
         with ThreadPoolExecutor(max_workers=min(adb_count, 4)) as executor:
             futures = [executor.submit(_handle_adb_device, d) for d in adb_devices]
@@ -151,7 +159,7 @@ class SerialQueryManager(QThread):
                 try:
                     f.result(timeout=120)
                 except Exception as e:
-                    print(f"[并行管理器] 设备任务异常: {e}")
+                    logger.warning("[并行管理器] 设备任务异常: %s", e)
     
     def _process_single_device(self, device_id, ip, password, system_type, needs_adb=False):
         """处理单个设备的完整查询流程"""
@@ -159,7 +167,7 @@ class SerialQueryManager(QThread):
         try:
             ToolService.adb_disconnect()
         except Exception as e:
-            print(f"[串行管理器] 断开ADB连接时出错: {e}")
+            logger.warning("[串行管理器] 断开ADB连接时出错: %s", e)
         self.msleep(300)
         
         try:
@@ -183,8 +191,12 @@ class SerialQueryManager(QThread):
             self._set_state(self.STATE_QUERYING)
 
             results = {}
-            dispatch = self._build_query_dispatch(
-                monitor_service, device_id, ip, password, system_type, results
+            dispatch = build_query_dispatch(
+                monitor_service, device_id, ip, password, system_type, results,
+                switch_log_file=self.switch_log_file,
+                custom_file_paths=self.custom_file_paths,
+                query_count=self.query_count,
+                csv_lock=self._csv_lock,
             )
             dispatch[self.query_type]()
             if self.query_type == "all":
@@ -207,7 +219,7 @@ class SerialQueryManager(QThread):
             try:
                 ToolService.adb_disconnect()
             except Exception as e:
-                print(f"[串行管理器] 设备 {device_id} 操作完成后断开ADB连接时出错: {e}")
+                logger.warning("[串行管理器] 设备 %s 操作完成后断开ADB连接时出错: %s", device_id, e)
 
     def _start_info_refresher(self, device_id, ip, password):
         """启动后台线程刷新设备信息，并通过信号通知 UI"""
@@ -231,76 +243,3 @@ class SerialQueryManager(QThread):
         """停止执行"""
         self.is_running = False
 
-    def _build_query_dispatch(self, monitor_service, device_id, ip, password,
-                               system_type, results):
-        """构建查询策略分发表，将查询类型映射到处理函数"""
-        custom_paths = self.custom_file_paths
-        switch_log_file = self.switch_log_file
-        query_count = self.query_count
-
-        def _time():
-            formatted_remote_time, time_diff = monitor_service.get_device_time_info(ip, password, device_id)
-            results['device_time'] = {
-                'formatted_remote_time': formatted_remote_time,
-                'time_diff': time_diff,
-            }
-
-        def _boot_time():
-            results['boot_time'] = monitor_service.get_uptime_info(ip, password, device_id)
-
-        def _start_count():
-            results['start_count'] = monitor_service.get_start_count(ip, password, device_id)
-
-        def _count_init():
-            results['count_init'] = monitor_service.count_init_setting(
-                ip, password, device_id, system_type, custom_file_paths=custom_paths
-            )
-
-        def _sum_switch():
-            path = get_device_remote_path(system_type)
-            switch_time, network_time, success, error_msg = monitor_service.sum_switch_count(ip, password, device_id, path)
-            if success:
-                if switch_log_file is not None:
-                    query_count[0] += 1
-                    switch_log_file.write(f"{device_id},{switch_time},{network_time}\n")
-                results['sum_switch'] = f"{device_id} 当前开关机次数为：{switch_time} 网络开关机次数为：{network_time}"
-            else:
-                results['sum_switch'] = error_msg
-
-        def _clean_switch():
-            path = get_device_remote_path(system_type)
-            success, error_msg = monitor_service.clean_switch_log(ip, password, device_id, path)
-            results['clean_switch'] = f"{device_id} 开关机记录已清除" if success else error_msg
-
-        def _check_time():
-            results['check_time'] = monitor_service.ntptime_checkout_time(ip, password, device_id, system_type)
-
-        def _upgrade_program():
-            results['upgrade_program'] = monitor_service.upgrade_program(
-                ip, password, device_id, system_type, custom_file_paths=custom_paths
-            )
-
-        def _screenshot():
-            results['screenshot'] = monitor_service.capture_screenshot(device_id, ip, password, system_type)
-
-        def _output_log():
-            path = get_device_remote_path(system_type)
-            _, output_log = monitor_service.switch_log_output(ip, password, device_id, system_type, path)
-            results['output_log'] = output_log
-
-        def _all():
-            pass  # 由 ALL_QUERY_KEYS 控制子处理器调用
-
-        return {
-            "all": _all,
-            "time": _time,
-            "boot_time": _boot_time,
-            "start_count": _start_count,
-            "count_init": _count_init,
-            "sum_switch": _sum_switch,
-            "clean_switch": _clean_switch,
-            "check_time": _check_time,
-            "upgrade_program": _upgrade_program,
-            "screenshot": _screenshot,
-            "output_log": _output_log,
-        }

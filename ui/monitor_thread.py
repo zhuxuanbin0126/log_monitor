@@ -134,10 +134,14 @@ class MonitorThread(QThread):
             screenshot_result = self.monitor_service.capture_screenshot(
                 device_id, ip, password, system_type, self.screenshot_path
             )
-            if screenshot_result and not screenshot_result.startswith("设备"):
-                self.update_signal.emit(f"设备 {device_id} ({ip}) 截图成功，保存路径: {screenshot_result}")
+            if screenshot_result.success:
+                self.update_signal.emit(
+                    f"设备 {device_id} ({ip}) 截图成功，保存路径: {screenshot_result.data}"
+                )
             else:
-                self.update_signal.emit(f"设备 {device_id} ({ip}) 截图失败: {screenshot_result}")
+                self.update_signal.emit(
+                    f"设备 {device_id} ({ip}) 截图失败: {screenshot_result.error}"
+                )
         except Exception as e:
             self.error_signal.emit(f"设备 {device_id} ({ip}) 截图时出错: {str(e)}", device_id, ip)
 

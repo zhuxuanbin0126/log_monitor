@@ -10,6 +10,9 @@ from datetime import datetime
 from service.tool_service import ToolService
 from service.file_service import FileService
 from service.adb_service import ADBService
+from service.logging_service import get_logger
+
+logger = get_logger(__name__)
 
 
 class DeviceLogService:
@@ -154,7 +157,7 @@ class DeviceLogService:
             # 执行 adb root
             serial = _ADB.get_device_serial(ip)
             stdout, stderr, rc = _ADB.root_device(serial)
-            print(f"[clean_switch] adb root: stdout={stdout!r} stderr={stderr!r} rc={rc}")
+            logger.debug("[clean_switch] adb root: stdout=%r stderr=%r rc=%s", stdout, stderr, rc)
 
             # adb root 成功后 adbd 重启，等待并重新连接
             _time.sleep(3)
@@ -163,7 +166,7 @@ class DeviceLogService:
 
             # 获取 root 后的新 serial
             serial = _ADB.get_device_serial(ip)
-            print(f"[clean_switch] root 后 serial: {serial}")
+            logger.debug("[clean_switch] root 后 serial: %s", serial)
 
             # 以 root 身份删除
             for filename in ["swich_counter.csv", "network_counter.csv"]:
@@ -172,18 +175,18 @@ class DeviceLogService:
                 from service.device_utils import ADB_PATH, run_command
                 full_cmd = f'{ADB_PATH} -s {serial} shell "{cmd}"'
                 stdout, stderr, rc = run_command(full_cmd, timeout=10)
-                print(f"[clean_switch] root rm {filename}: rc={rc} stderr={stderr!r}")
+                logger.debug("[clean_switch] root rm %s: rc=%s stderr=%r", filename, rc, stderr)
 
                 # 验证删除结果
                 verify_cmd = f'{ADB_PATH} -s {serial} shell "ls -l {delete_path}/{filename}"'
                 v_stdout, v_stderr, v_rc = run_command(verify_cmd, timeout=5)
                 if v_rc == 0 and "No such" not in v_stdout:
-                    print(f"[clean_switch] ⚠ {filename} 仍然存在! 权限: {v_stdout.strip()}")
+                    logger.warning("[clean_switch] %s 仍然存在! 权限: %s", filename, v_stdout.strip())
 
             _ADB.disconnect()
             return True
         except Exception as e:
-            print(f"[clean_switch] root delete failed: {e}")
+            logger.warning("[clean_switch] root delete failed: %s", e)
             try:
                 _ADB.disconnect()
             except Exception:

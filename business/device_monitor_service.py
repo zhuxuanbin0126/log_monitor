@@ -16,6 +16,9 @@ from device_config import get_init_config, get_upgrade_config
 from business.screenshot_service import ScreenshotService
 from business.device_log_service import DeviceLogService
 from data_models import DeviceState, OperationResult
+from service.logging_service import get_logger
+
+logger = get_logger(__name__)
 
 class DeviceMonitorService:
     """设备监控业务服务类，负责设备监控的核心业务逻辑"""
@@ -48,11 +51,17 @@ class DeviceMonitorService:
             return f"{tool_path}/{filename}"
         
         try:
-            result_log = self.ntptime_checkout_time(ip, password, device_id, system_type)
-            if "失败" in result_log:
-                raise Exception(result_log)
+            sync_result = self.ntptime_checkout_time(ip, password, device_id, system_type)
+            if not sync_result.success:
+                return OperationResult(
+                    False,
+                    error=f"{device_id} 设备校时失败 - {sync_result.error},请检查网络是否正常连接外网",
+                )
         except Exception as e:
-            return f"{device_id} 设备校时失败 - {str(e)},请检查网络是否正常连接外网"
+            return OperationResult(
+                False,
+                error=f"{device_id} 设备校时失败 - {str(e)},请检查网络是否正常连接外网",
+            )
 
         try:
             dev_type_prefix = device_id.split('-')[0]
@@ -60,7 +69,10 @@ class DeviceMonitorService:
             # 从 device_info.json 动态加载初始化配置
             init_config = get_init_config(dev_type_prefix)
             if not init_config:
-                return f"{device_id} 设置开关机失败 - 未在 device_info.json 中找到 {dev_type_prefix} 的开关机初始化配置"
+                return OperationResult(
+                    False,
+                    error=f"{device_id} 设置开关机失败 - 未在 device_info.json 中找到 {dev_type_prefix} 的开关机初始化配置",
+                )
             
             is_android = ToolService.is_android_device(device_id)
             steps = []
@@ -146,12 +158,15 @@ class DeviceMonitorService:
                     steps.append("文件验证成功")
             
             if error:
-                return f"{device_id} 设置开关机失败 - {error}"
+                return OperationResult(False, error=f"{device_id} 设置开关机失败 - {error}")
             else:
-                return f"{device_id} 设置开关机成功 - 执行步骤: {'; '.join(steps)}"
+                return OperationResult(
+                    True,
+                    data=f"{device_id} 设置开关机成功 - 执行步骤: {'; '.join(steps)}",
+                )
                 
         except Exception as e:
-            return f"{device_id} 设置开关机失败 - {str(e)}"
+            return OperationResult(False, error=f"{device_id} 设置开关机失败 - {str(e)}")
 
     def sum_switch_count(self, ip, password, device_id, path):
         """设备累计开机次数"""
@@ -172,12 +187,12 @@ class DeviceMonitorService:
                 remote_file = "/system/bin/ntpdate"
                 stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/ntpdate", remote_file, use_reliable=True)
                 if stderr or returncode != 0:
-                    return f"{device_id} 推送ntpdate失败 - {stderr}"
+                    return OperationResult(False, error=f"{device_id} 推送ntpdate失败 - {stderr}")
             else:
                 remote_file = "/bin/ntpdate"
                 stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/ntpdate", remote_file)
                 if stderr or returncode != 0:
-                    return f"{device_id} 推送ntpdate失败 - {stderr}"
+                    return OperationResult(False, error=f"{device_id} 推送ntpdate失败 - {stderr}")
             
             ToolService.execute_command(device_id, ip, password, f"chmod +x {remote_file}", ".")
             
@@ -188,9 +203,9 @@ class DeviceMonitorService:
             ToolService.execute_command(device_id, ip, password, f"rm -f {remote_file}", ".")
             
             stdout, _, _ = ToolService.execute_command(device_id, ip, password, "date", ".")
-            return f"{device_id} 时间已校时成功，时间为：{stdout}"
+            return OperationResult(True, data=f"{device_id} 时间已校时成功，时间为：{stdout}")
         except Exception as e:
-            return f"{device_id} 设置时间失败 - {str(e)}"
+            return OperationResult(False, error=f"{device_id} 设置时间失败 - {str(e)}")
 
     def upgrade_program(self, ip, password, device_id, system_type, custom_file_paths=None):
         """
@@ -205,7 +220,10 @@ class DeviceMonitorService:
             # 从 device_info.json 动态加载发送节目配置
             upgrade_config = get_upgrade_config(dev_type_prefix)
             if not upgrade_config:
-                return f"{device_id} 更新节目失败 - 未在 device_info.json 中找到 {dev_type_prefix} 的发送节目配置"
+                return OperationResult(
+                    False,
+                    error=f"{device_id} 更新节目失败 - 未在 device_info.json 中找到 {dev_type_prefix} 的发送节目配置",
+                )
             
             remote_dir = upgrade_config["remote_dir"]
             restart_cmd = upgrade_config.get("restart_cmd", "")
@@ -220,7 +238,7 @@ class DeviceMonitorService:
                 local_program = f"{program_path}/{program_name}"
             
             if not os.path.exists(local_program):
-                return f"设备节目不存在，请检查: {local_program}"
+                return OperationResult(False, error=f"设备节目不存在，请检查: {local_program}")
             
             # 执行前置命令
             for cmd in pre_commands:
@@ -237,9 +255,9 @@ class DeviceMonitorService:
             
             # 重启播放器
             ToolService.execute_command(device_id, ip, password, restart_cmd, ".")
-            return f"{device_id} 更新节目成功,重启播放器"
+            return OperationResult(True, data=f"{device_id} 更新节目成功,重启播放器")
         except Exception as e:
-            return f"{device_id} 更新节目失败 - {str(e)}"
+            return OperationResult(False, error=f"{device_id} 更新节目失败 - {str(e)}")
 
     def get_uptime_info(self, ip, password, device_id):
         """
@@ -554,12 +572,12 @@ class DeviceMonitorService:
         import subprocess
         
         while True:
-            print(f"\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}开始监控 {self.dev_type} 类型设备...")
+            logger.info("开始监控 %s 类型设备...", self.dev_type)
             time.sleep(1)
             # 获取设备列表
             devices = ToolService.get_device_list(self.dev_type)
             device_count = len(devices)
-            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}发现 {device_count} 台设备")
+            logger.info("发现 %s 台设备", device_count)
             
             has_new_errors = False  # 标记是否有新错误
             
@@ -568,8 +586,8 @@ class DeviceMonitorService:
                 device_id = device['id']
                 ip = device['ip']
                 password = device['password']
-                print(f"\n检查设备: {device_id} ({ip})")
-                print(f"密码: {password}")
+                logger.info("检查设备: %s (%s)", device_id, ip)
+                logger.debug("设备 %s 密码已获取", device_id)
                 
                 # 检查设备状态
                 errors = self.check_device_status(device_id, ip, password)
@@ -609,11 +627,11 @@ class DeviceMonitorService:
                 self.notepad_process = subprocess.Popen(['notepad.exe', 'device_errors.txt'])
             
             # 倒计时
-            print("\n所有设备检查完成，等待下一轮检查...")
+            logger.info("所有设备检查完成，等待下一轮检查...")
             for i in range(delay_time, 0, -1):
-                print(f"\r下一轮检查倒计时: {i-1}秒", end='')
+                if i % 30 == 0:
+                    logger.debug("下一轮检查倒计时: %s秒", i - 1)
                 time.sleep(1)
-            print("\n")
             
             # 清空完成记录
             ok_ids_file = f"{self.base_dir}/{self.dev_type}_{datetime.now().strftime('%Y%m%d')}.log"

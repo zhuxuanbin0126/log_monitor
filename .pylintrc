@@ -1,0 +1,9 @@
+[MAIN]
+py-version = 3.11
+jobs = 1
+
+[MESSAGES CONTROL]
+# PyQt5 为 C 扩展，pylint 无法静态枚举模块成员；dataclass 字段为运行期生成。
+disable =
+    no-name-in-module,
+    no-member

@@ -15,12 +15,15 @@ from service.adb_service import ADBService
 from service.device_utils import (
     ADB_PATH, run_command, get_tool_path, is_android_device,
 )
+from service.logging_service import get_logger
+
+logger = get_logger(__name__)
 
 
 def _log(level, message):
-    """简单日志输出，带时间戳"""
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print(f"[{timestamp}] [ADBManager] [{level}] {message}")
+    """统一日志输出（ERROR/WARN/INFO）。"""
+    log_method = {'ERROR': logger.error, 'WARN': logger.warning}.get(level, logger.info)
+    log_method(message)
 
 
 class ADBDeviceManager:

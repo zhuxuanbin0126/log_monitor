@@ -15,6 +15,9 @@ from config import (
     SWITCH_LOG_DIR,
     EXCEL_DIR,
 )
+from .logging_service import get_logger
+
+logger = get_logger(__name__)
 
 
 class FileService:
@@ -160,7 +163,7 @@ class FileService:
                 f.write(FileService._format_error_details(error_details))
                 f.write(f"{'='*50}\n")
         except Exception as e:
-            print(f"写入错误日志失败: {str(e)}")
+            logger.exception("写入错误日志失败: %s", e)
             try:
                 with open(ERROR_LOG_FILE, 'a', encoding='utf-8') as f:
                     f.write(f"\n{'='*50}\n")

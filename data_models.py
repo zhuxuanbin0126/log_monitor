@@ -24,6 +24,13 @@ class OperationResult:
     def __bool__(self) -> bool:
         return self.success
 
+    @property
+    def message(self) -> str:
+        """面向 UI 的单行结果文本：成功取 data，失败取 error。"""
+        if self.success:
+            return "" if self.data is None else str(self.data)
+        return self.error or ""
+
 
 # ============================================================
 # 设备状态模型

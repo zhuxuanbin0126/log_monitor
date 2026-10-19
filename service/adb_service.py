@@ -10,6 +10,9 @@ from .device_utils import (
     ADB_PATH, get_tool_path, run_command, calculate_md5, TOOLS_DIR,
     DEVICE_OTG_CONFIG, is_android_device,
 )
+from .logging_service import get_logger
+
+logger = get_logger(__name__)
 
 
 class ADBService:
@@ -43,7 +46,7 @@ class ADBService:
             )
             if stderr and ("unable" in stderr.lower() or "cannot" in stderr.lower() or "refused" in stderr.lower()):
                 try:
-                    print(f"[push] 连接失败，尝试通过SSH重启ADB服务")
+                    logger.warning("[push] 连接失败，尝试通过SSH重启ADB服务")
                     plink_exe = get_tool_path('plink.exe')
                     run_command(f"echo y | {plink_exe} -l root -pw \"{password}\" \"{ip}\" \"setprop service.adb.tcp.port 5555\"", timeout=5)
                     run_command(f"echo y | {plink_exe} -l root -pw \"{password}\" \"{ip}\" \"stop adbd\"", timeout=5)
@@ -58,10 +61,10 @@ class ADBService:
                     return "", str(e), -1
 
             serial = ADBService.get_device_serial(ip)
-            print(f"[push] 开始推送文件: {local_file} -> {remote_file}")
+            logger.info("[push] 开始推送文件: %s -> %s", local_file, remote_file)
             cmd = f"{ADB_PATH} -s {serial} push \"{local_file}\" \"{remote_file}\""
             stdout, stderr, returncode = run_command(cmd, timeout=60)
-            print(f"[push] 推送结果: stdout={stdout}, stderr={stderr}, code={returncode}")
+            logger.debug("[push] 推送结果: stdout=%s, stderr=%s, code=%s", stdout, stderr, returncode)
 
             ADBService.disconnect()
             return stdout.strip(), stderr.strip(), returncode
@@ -120,7 +123,7 @@ class ADBService:
             # 步骤2: 确认当前无设备连接
             cmd = f"{ADB_PATH} devices"
             devices_output, _, _ = run_command(cmd, timeout=10)
-            print(f"[ADB] devices 输出: {devices_output}")
+            logger.debug("[ADB] devices 输出: %s", devices_output)
 
             # 步骤3: 连接目标设备
             cmd = f"{ADB_PATH} connect {ip}:5555"
@@ -146,7 +149,7 @@ class ADBService:
                 serial = ADBService.get_device_serial(ip)
                 cmd = f"{ADB_PATH} -s {serial} root"
                 root_stdout, root_stderr, root_rc = run_command(cmd, timeout=10)
-                print(f"[ADB] root 结果: {root_stdout} {root_stderr}")
+                logger.debug("[ADB] root 结果: %s %s", root_stdout, root_stderr)
                 time.sleep(3)
                 ADBService.remount_system(ip)
 

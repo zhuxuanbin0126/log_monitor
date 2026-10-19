@@ -4,13 +4,16 @@ from service.tool_service import ToolService
 import time
 import os
 from config import supported_dev_types, get_base_dir
+from service.logging_service import get_logger
+
+logger = get_logger(__name__)
 
 
 def run_time(func, *args):
     start = time.perf_counter()
     result = func(*args)
     end = time.perf_counter()
-    print(f"耗时: {end - start:.6f} 秒")
+    logger.debug("耗时: %.6f 秒", end - start)
     return result
 
 
@@ -38,7 +41,7 @@ class GetDeviceInfoManager(QObject):
             if len(self.task_queue) < self.queue_size:
                 self.task_queue.append(devices_info)
             else:
-                print(f"任务队列已满，丢弃任务 {devices_info}")
+                logger.warning("任务队列已满，丢弃任务 %s", devices_info)
 
     def _execute_task(self, devices_info, pattern):
         # print(f"查询设备{devices_info}")
@@ -73,7 +76,7 @@ class QRunnableWrapper(QRunnable):
                     if devices and devices.get("mac_address") and devices["mac_address"] != "未知":
                         break
                 except Exception as inner_e:
-                    print(f"查询设备 {self.devices_info} 第 {i+1} 次尝试失败: {inner_e}")
+                    logger.warning("查询设备 %s 第 %s 次尝试失败: %s", self.devices_info, i + 1, inner_e)
                 
                 if i < 2:
                     time.sleep(0.1)
@@ -84,10 +87,7 @@ class QRunnableWrapper(QRunnable):
             else:
                 self.completed_signal.emit(None)
         except Exception as e:
-            # 错误处理建议
-            import traceback
-            print(f"查询设备 {self.devices_info} 失败: {e}")
-            print(traceback.format_exc())
+            logger.exception("查询设备 %s 失败: %s", self.devices_info, e)
             self.completed_signal.emit(None)
 
 
@@ -172,7 +172,6 @@ class GetDeviceListThread(QThread):
         except Exception as e:
             error_msg = f"获取设备列表时出错: {str(e)}"
             self.error_signal.emit(error_msg)
-            import traceback
-            print(traceback.format_exc())
+            logger.exception("获取设备列表时出错")
         finally:
             self.finished_signal.emit()

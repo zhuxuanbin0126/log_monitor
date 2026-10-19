@@ -21,6 +21,9 @@ from .device_utils import (
 )
 from .adb_service import ADBService
 from .adb_device_manager import ADBDeviceManager
+from .logging_service import get_logger
+
+logger = get_logger(__name__)
              
              
              
@@ -51,7 +54,7 @@ class ToolService:
         device_id_exe = ToolService.get_tool_path('DeviceId.exe')
         stdout, stderr, returncode = ToolService.run_command(device_id_exe)
         if stderr:
-            print(f"DeviceId.exe 错误: {stderr}")
+            logger.warning("DeviceId.exe 错误: %s", stderr)
             return []
         
         # 过滤符合模式的设备
@@ -78,7 +81,7 @@ class ToolService:
                             device_id, ip, password
                         )
                     except Exception as e:
-                        print(f"获取设备 {device_id} 详细信息时出错: {str(e)}")
+                        logger.warning("获取设备 %s 详细信息时出错: %s", device_id, e)
                     
                     # 尝试获取OTA版本和主版本
                     ota_version = "N/A"
@@ -89,7 +92,7 @@ class ToolService:
                             device_id, ip, password
                         )
                     except Exception as e:
-                        print(f"获取设备 {device_id} 版本信息时出错: {str(e)}")
+                        logger.warning("获取设备 %s 版本信息时出错: %s", device_id, e)
                     
                     # 将所有设备信息存储为字典
                     devices.append({
@@ -144,7 +147,7 @@ class ToolService:
                                 device_name = html.unescape(info_parts[1])
                                 system_type = info_parts[2]
                 except Exception as e:
-                    print(f"使用getdeviceinfo.sh获取信息失败: {e}")
+                    logger.warning("使用getdeviceinfo.sh获取信息失败: %s", e)
                 
                 # 如果没有获取到信息，尝试直接获取
                 if mac_address == "N/A":
@@ -180,9 +183,9 @@ class ToolService:
                                 device_name = html.unescape(info_parts[1])
                                 system_type = info_parts[2]
                         except Exception as parse_e:
-                            print(f"解析设备信息失败: {parse_e}")
+                            logger.warning("解析设备信息失败: %s", parse_e)
         except Exception as e:
-            print(f"获取设备信息时出错: {e}")
+            logger.warning("获取设备信息时出错: %s", e)
         
         return mac_address, device_name, system_type
 
@@ -246,7 +249,7 @@ class ToolService:
                                 main_version = ver_parts[1].strip()
                                 break
         except Exception as e:
-            print(f"获取版本信息时出错: {e}")
+            logger.warning("获取版本信息时出错: %s", e)
         
         return ota_version, main_version
 
@@ -279,13 +282,13 @@ class ToolService:
             adb_status = '未知'
             if ToolService.is_android_device(device_id):
                 try:
-                    print(f"[ToolService] 刷新设备 {device_id}，尝试确保网络 ADB 已开启")
+                    logger.info("[ToolService] 刷新设备 %s，尝试确保网络 ADB 已开启", device_id)
                     adb_ok, serial = ADBDeviceManager.ensure_adb_connected(ip, password, device_id)
                     adb_status = '开启' if adb_ok else '未开启'
-                    print(f"[ToolService] 设备 {device_id} ADB 状态: {adb_status}, serial={serial}")
+                    logger.info("[ToolService] 设备 %s ADB 状态: %s, serial=%s", device_id, adb_status, serial)
                 except Exception as adb_e:
                     adb_status = '未开启'
-                    print(f"[ToolService] 设备 {device_id} 开启 ADB 失败: {adb_e}")
+                    logger.warning("[ToolService] 设备 %s 开启 ADB 失败: %s", device_id, adb_e)
             else:
                 adb_status = '不支持'
 
@@ -315,8 +318,7 @@ class ToolService:
             return device_info
         except Exception as e:
             import traceback
-            print(f"处理设备信息时发生严重错误: {str(e)}")
-            print(traceback.format_exc())
+            logger.exception("处理设备信息时发生严重错误: %s", e)
             return None
     
     @staticmethod
@@ -329,7 +331,7 @@ class ToolService:
             hpassword_exe = ToolService.get_tool_path('HPassword.exe')
             stdout, stderr, returncode = ToolService.run_command(f'{hpassword_exe} "{device_id}"')
             if stderr:
-                print(f"HPassword.exe 错误 (尝试 {attempt + 1}/{max_retries}): {stderr}")
+                logger.warning("HPassword.exe 错误 (尝试 %s/%s): %s", attempt + 1, max_retries, stderr)
                 if "Access denied" in stderr or "password was not accepted" in stderr:
                     # 等待一段时间后重试
                     import time
@@ -345,7 +347,7 @@ class ToolService:
             import time
             time.sleep(2)
         
-        print(f"HPassword.exe 获取设备 {device_id} 密码失败，已达到最大重试次数")
+        logger.error("HPassword.exe 获取设备 %s 密码失败，已达到最大重试次数", device_id)
         return ""
     
     @staticmethod
@@ -379,21 +381,12 @@ class ToolService:
     @staticmethod
     def execute_command(device_id, ip, password, command_script, base_dir="."):
         """
-        统一的远程命令执行接口,根据设备类型自动选择SSH或ADB
-        对于Android设备且网络ADB已成功开启的，强制使用 adb -s [serial] 执行命令。
-        若 ADB 不可用，则回退到 SSH(plink) 执行。
+        统一的远程命令执行接口，根据设备类型自动选择传输实现。
+        对于 Android 设备且网络 ADB 已成功开启的，使用 adb -s [serial] 执行；
+        ADB 不可用时回退到 SSH。
         """
-        if ToolService.is_android_device(device_id):
-            # Android设备：如果 ADB 已开启，则使用 adb -s [serial] shell
-            if ADBDeviceManager.should_use_adb(device_id):
-                success, serial = ADBDeviceManager.ensure_adb_connected(ip, password, device_id)
-                if success and serial:
-                    return ADBDeviceManager.execute_adb_command(ip, serial, command_script)
-            # ADB 不可用或 should_use_adb 为 False：回退到 SSH(plink)
-            return ToolService.ssh_execute_command(ip, password, command_script, base_dir)
-        else:
-            # Linux设备使用SSH
-            return ToolService.ssh_execute_command(ip, password, command_script, base_dir)
+        from .transports import get_transport
+        return get_transport(device_id).execute(ip, password, command_script, base_dir)
 
     
     @staticmethod

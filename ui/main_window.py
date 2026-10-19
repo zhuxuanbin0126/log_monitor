@@ -3,29 +3,28 @@ from PyQt5.QtWidgets import (QApplication, QMessageBox, QDialog, QWidget,
                               QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                               QPushButton, QGroupBox, QGridLayout, QFileDialog, 
                               QScrollArea)
-from PyQt5.QtCore import QTimer, Qt
 from datetime import datetime
 import os
 import shutil
-import re
-import json
 
 from .base_window import BaseWindow
 from .control_panel import ControlPanel
 from .device_list_view import DeviceListView
-from .reflash_device_threadpool import GetDeviceInfoManager, GetDeviceListThread
+from .device_refresh_controller import DeviceRefreshController
+from .error_log_manager import ErrorLogManager
+from .excel_exporter import ExcelExporter
+from .query_result_presenter import QueryResultPresenter
 from .result_display_view import ResultDisplayView
 from .monitor_thread import MonitorThread
-from .query_thread import QueryThread
 from .serial_query_manager import SerialQueryManager
-from .reflash_device_thread import ReflashThread
 
 from service.tool_service import ToolService
 from service.file_service import FileService
-from service.data_processing_service import DataProcessingService
+from service.logging_service import get_logger
 from config import get_base_dir, supported_dev_types, tool_path, program_path
-from device_config import get_init_grouped_configs, get_upgrade_grouped_configs, get_device_config
 from .dialogs import CountInitConfirmDialog, UpgradeConfirmDialog
+
+logger = get_logger(__name__)
 
 
 class MainWindow(BaseWindow):
@@ -37,11 +36,14 @@ class MainWindow(BaseWindow):
         # 初始化变量
         self.devices = None
         self.monitor_thread = None
-        self.query_threads = []
+        self.serial_manager = None
+        self.switch_log_file = None
+        self.query_count = [0]
         self.dev_type = ControlPanel().dev_type
-        self.notepad_process = None  # 用于跟踪记事本进程
-        self.excel_file = None  # 用于存储当前使用的Excel文件名
-        self.Manager = None
+        self.error_log_manager = ErrorLogManager(self.log)
+        self.excel_exporter = ExcelExporter(self.log)
+        self.query_presenter = QueryResultPresenter(self.log, self.format_time_to_minute)
+        self.refresh_controller = DeviceRefreshController(self)
         
         # 启动时最大化窗口
         self.showMaximized()
@@ -65,8 +67,6 @@ class MainWindow(BaseWindow):
         # 完成布局
         self.finalize_layout()
         
-        self.find_dev_Thread = None
-
         # self.refresh_device_list()
 
     def init_components(self):
@@ -104,6 +104,12 @@ class MainWindow(BaseWindow):
         
         # 结果显示信号连接
         self.result_display_view.clear_log_clicked.connect(self.on_clear_log)
+
+        # 设备刷新控制器信号连接
+        self.refresh_controller.progress.connect(self.control_panel.update_refresh_status)
+        self.refresh_controller.devices_ready.connect(self.on_devices_ready)
+        self.refresh_controller.failed.connect(self.on_refresh_failed)
+        self.refresh_controller.finished.connect(self.on_refresh_finished)
 
     def refresh_android_device_info_after_adb(self, device_id, ip, password):
         """
@@ -168,111 +174,11 @@ class MainWindow(BaseWindow):
                     info['adb_status'] = '开启'
                     break
         except Exception as e:
-            print(f"[MainWindow] ADB 开启后刷新设备信息失败 {device_id}: {e}")
+            logger.warning("[MainWindow] ADB 开启后刷新设备信息失败 %s: %s", device_id, e)
 
     def handle_error(self, error_msg, device_id, ip):
         """处理监控线程发送的错误信号"""
-        # 优化错误消息显示
-        optimized_msg = self._optimize_error_message(error_msg)
-        self.log(optimized_msg, is_error=True)
-        # 调用同名的write_to_error_log方法
-        self.write_to_error_log(error_msg, device_id=device_id, ip=ip)
-        # 写入错误日志后自动打开记事本
-        self.open_error_log_in_notepad()
-    
-    def write_to_error_log(self, message=None, device_id=None, ip=None, password=None, errors=None):
-        """写入错误日志到文件"""
-        try:
-            # 1. 提取和准备错误信息
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
-            # 从错误消息中提取设备信息（如果未直接提供）
-            if not device_id or not ip:
-                extracted_id, extracted_ip = DataProcessingService.extract_device_info(message)
-                device_id = device_id or extracted_id
-                ip = ip or extracted_ip
-
-            # 2. 确定错误类型
-            error_type = self._determine_error_type(message, errors)
-
-            # 3. 构建错误详情
-            error_details = self._build_error_details(message, errors)
-
-            # 4. 创建格式化的错误信息
-            error_info = {
-                "时间": current_time,
-                "设备ID": device_id,
-                "IP地址": ip,
-                "错误类型": error_type,
-                "错误详情": error_details
-            }
-
-            # 写入错误日志
-            from service.file_service import FileService
-            FileService.write_error_log(error_info)
-
-        except Exception as e:
-            # 避免递归调用 log 和 write_to_error_log
-            print(f"写入错误日志失败: {str(e)}")
-
-    def _determine_error_type(self, message, errors):
-        """确定错误类型"""
-        if errors and isinstance(errors, list):
-            # 从结构化错误中获取类型
-            return next((err.get('type', '设备异常') for err in errors if isinstance(err, dict)), '设备异常')
-        
-        # 从消息文本判断错误类型
-        error_patterns = [
-            (r'时间[差异]|同步|时钟', '时间同步异常'),
-            (r'启动次数|重启', '启动次数异常'),
-            (r'离线|断开|连接失败', '设备离线'),
-            (r'超时|timeout', '通信超时'),
-            (r'认证|密码|登录', '认证失败')
-        ]
-        
-        for pattern, err_type in error_patterns:
-            if re.search(pattern, message, re.IGNORECASE):
-                return err_type
-                
-        return '设备异常'
-
-    def _optimize_error_message(self, message):
-        """优化错误消息显示，使其更友好"""
-        # 处理密码认证失败的错误消息
-        if "Access denied" in message and "password was not accepted" in message:
-            return "设备通信异常: 密码认证失败，请检查设备密码配置"
-        
-        # 处理其他常见的错误消息
-        error_patterns = [
-            (r'获取启动时间失败', '设备启动时间获取失败'),
-            (r'获取设备时间失败', '设备时间获取失败'),
-            (r'获取运行时长失败', '设备运行时长获取失败'),
-            (r'获取启动次数失败', '设备启动次数获取失败'),
-            (r'超时', '设备通信超时'),
-            (r'连接失败', '设备连接失败'),
-        ]
-        
-        for pattern, replacement in error_patterns:
-            if re.search(pattern, message, re.IGNORECASE):
-                return re.sub(pattern, replacement, message, flags=re.IGNORECASE)
-        
-        # 默认返回原消息
-        return message
-
-    def _build_error_details(self, message, errors):
-        """构建错误详情"""
-        if errors:
-            if isinstance(errors, list):
-                return errors
-            if isinstance(errors, dict):
-                return [errors]
-                
-        # 创建基本错误详情
-        return [{
-            'type': self._determine_error_type(message, None),
-            'process': '错误处理',
-            'difference': message
-        }]
+        self.error_log_manager.handle(error_msg, device_id, ip)
 
     def on_dev_type_changed(self, text):
         """设备类型改变时的处理"""
@@ -341,11 +247,11 @@ class MainWindow(BaseWindow):
                         screenshot_result = monitor_service.capture_screenshot(
                             device_id, ip, password, "Android", screenshot_path
                         )
-                        if screenshot_result and (screenshot_result.startswith("设备") or "执行截图命令失败" in screenshot_result):
-                            screenshot_failed_devices.append(device_id)
-                            self.log(f"设备 {device_id} ({ip}) 截图失败: {screenshot_result}")
+                        if screenshot_result.success:
+                            self.log(f"设备 {device_id} ({ip}) 截图成功: {screenshot_result.data}")
                         else:
-                            self.log(f"设备 {device_id} ({ip}) 截图成功: {screenshot_result}")
+                            screenshot_failed_devices.append(device_id)
+                            self.log(f"设备 {device_id} ({ip}) 截图失败: {screenshot_result.error}")
                     except Exception as e:
                         screenshot_failed_devices.append(device_id)
                         self.log(f"设备 {device_id} ({ip}) 截图时出错: {str(e)}")
@@ -437,7 +343,7 @@ class MainWindow(BaseWindow):
         if clear_history:
             self.log("正在清除历史监控数据...")
             self.clear_history_data()
-            self.excel_file = None
+            self.excel_exporter.reset()
 
         # 第一次获取设备信息，检测设备在线情况和可执行性
         self.log("开始第一次获取设备信息，检测设备在线情况...")
@@ -684,15 +590,8 @@ class MainWindow(BaseWindow):
             self.log("请先选择要查询的设备")
             return
         
-        # 清理可能遗留的查询线程（向后兼容；当前使用 SerialQueryManager）
-        for thread in self.query_threads:
-            if thread.isRunning():
-                thread.quit()
-                thread.wait()
-        self.query_threads.clear()
-        
         # 如果存在串行管理器，停止它
-        if hasattr(self, 'serial_manager') and self.serial_manager and self.serial_manager.isRunning():
+        if self.serial_manager and self.serial_manager.isRunning():
             self.serial_manager.stop()
             self.serial_manager.wait()
         
@@ -766,10 +665,11 @@ class MainWindow(BaseWindow):
         self.serial_manager.start()
         
         # 判断是查询还是操作
-        if self._is_query_operation(query_type):
-            self.log(f"\n-----------------------------------------------------------------------\n开始查询 {self.getdevice_num} 台设备的{self.get_query_type_text(query_type)}信息")
+        op_text = self.query_presenter.query_type_text(query_type)
+        if QueryResultPresenter.is_query_operation(query_type):
+            self.log(f"\n-----------------------------------------------------------------------\n开始查询 {self.getdevice_num} 台设备的{op_text}信息")
         else:
-            self.log(f"\n-----------------------------------------------------------------------\n开始执行 {self.getdevice_num} 台设备的{self.get_query_type_text(query_type)}操作")
+            self.log(f"\n-----------------------------------------------------------------------\n开始执行 {self.getdevice_num} 台设备的{op_text}操作")
     
     def on_query_state(self, device_id, state):
         """接收 SerialQueryManager 的状态信号，更新 ADB 列或刷新设备信息"""
@@ -795,39 +695,8 @@ class MainWindow(BaseWindow):
                             info_item.update(info)
                             break
             except Exception as e:
-                print(f"[MainWindow] 解析 INFO_REFRESH 失败: {e}")
+                logger.warning("[MainWindow] 解析 INFO_REFRESH 失败: %s", e)
 
-    def _is_query_operation(self, query_type):
-        """判断是否是查询操作"""
-        query_types = ["all", "time", "boot_time", "start_count", "sum_switch"]
-        return query_type in query_types
-    
-    def get_query_type_text(self, query_type):
-        """获取查询类型的文本描述"""
-        if query_type == "all":
-            return "全部"
-        elif query_type == "time":
-            return "设备时间"
-        elif query_type == "boot_time":
-            return "启动时间"
-        elif query_type == "start_count":
-            return "播放器启动次数"
-        elif query_type == "count_init":
-            return "开关机初始化"
-        elif query_type == "sum_switch":
-            return "开关机次数"
-        elif query_type == "clean_switch":
-            return "清空开关机次数"
-        elif query_type == "check_time":
-            return "校时"
-        elif query_type == "upgrade_program":
-            return "发送节目"
-        elif query_type == "screenshot":
-            return "截图"
-        elif query_type == "output_log":
-            return "导出开关机日志"
-        return "未知"
-    
     def close_csv_file(self, query_count):
         """关闭csv文件并显示汇总"""
         if query_count == self.getdevice_num:
@@ -835,116 +704,23 @@ class MainWindow(BaseWindow):
                 self.switch_log_file.close()
             # 显示汇总信息（监控任务的查询和截图不显示汇总）
             if not (self.monitor_thread and self.monitor_thread.isRunning()):
-                self._show_query_summary()
+                self.query_presenter.show_summary(
+                    self.current_query_type,
+                    self.getdevice_num,
+                    self.successful_devices,
+                    self.failed_devices,
+                )
             # 更新状态栏提示
-            op_text = self.get_query_type_text(self.current_query_type)
+            op_text = self.query_presenter.query_type_text(self.current_query_type)
             self.update_status_bar(f"已完成 {self.getdevice_num} 台设备 {op_text}")
-
-    def _show_query_summary(self):
-        """显示查询或操作的汇总信息"""
-        is_query = self._is_query_operation(self.current_query_type)
-        op_text = self.get_query_type_text(self.current_query_type)
-        success_count = len(self.successful_devices)
-        fail_count = len(self.failed_devices)
-        
-        self.log(f"\n-----------------------------------------------------------------------")
-        
-        if is_query:
-            self.log(f"查询汇总:")
-            self.log(f"  总设备数: {self.getdevice_num}")
-            self.log(f"  查询成功: {success_count} 台")
-            self.log(f"  查询失败: {fail_count} 台")
-            if self.failed_devices:
-                self.log(f"  失败设备: {', '.join(self.failed_devices)}", is_error=True)
-        else:
-            self.log(f"已完成 {self.getdevice_num} 台设备的{op_text}操作")
-            if fail_count > 0:
-                self.log(f"  操作失败: {fail_count} 台")
-                self.log(f"  失败设备: {', '.join(self.failed_devices)}", is_error=True)
-        
-        self.log(f"-----------------------------------------------------------------------")
 
     def on_query_result(self, device_id, results):
         """处理查询结果"""
-        # 判断操作是否成功
-        success = True
-        
-        # 检查结果中是否有错误
-        for key, value in results.items():
-            if isinstance(value, dict) and 'error' in value:
-                success = False
-                break
-            # 检查字符串结果中是否有失败关键词
-            if isinstance(value, str) and ('失败' in value or '错误' in value or '无法' in value):
-                success = False
-                break
-        
-        # 记录成功或失败
+        success = self.query_presenter.present(device_id, results)
         if success:
             self.successful_devices.append(device_id)
         else:
             self.failed_devices.append(device_id)
-        
-        # 显示结果
-        self.log(f"\n设备 {device_id} 操作结果:")
-        
-        if 'device_time' in results:
-            time_info = results['device_time']
-            from datetime import datetime, timedelta
-            # 将UTC时间转换为本地时间（UTC+8）
-            if time_info['formatted_remote_time'] != 'N/A':
-                utc_time = datetime.strptime(time_info['formatted_remote_time'], '%Y-%m-%d %H:%M:%S')
-                local_time = utc_time + timedelta(hours=8)
-                self.log(f"设备时间: {local_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            else:
-                self.log("设备时间: N/A")
-            time_diff = int(time_info['time_diff']) if time_info['time_diff'] != 'N/A' else 0
-            self.log(f"时间差: {time_diff} 秒")
-            # 时间差小于120秒属于正常，否则记录警告
-            if time_diff != 'N/A' and time_diff > 120:
-                self.log(f"警告: 设备时间与系统时间偏差超过120秒", is_warning=True)
-        
-        if 'boot_time' in results:
-            boot_info = results['boot_time']
-            if 'error' not in boot_info:
-                self.log(f"运行时长: {boot_info.get('formatted_uptime', 'N/A')}")
-                self.log(f"启动时间: {self.format_time_to_minute(boot_info.get('boot_time', 'N/A'))}")
-            else:
-                self.log(f"获取启动时间失败: {boot_info['error']}", is_error=True)
-
-        
-        if 'start_count' in results:
-            self.log(f"播放器启动次数: {results['start_count']}")
-            # 启动次数为1属于正常，否则记录警告
-            if results['start_count'] != '无法获取':
-                try:
-                    start_count = int(results['start_count'])
-                    if start_count > 1:
-                        self.log(f"警告: 播放器启动次数异常，当前值为 {start_count}", is_warning=True)
-                except (ValueError, TypeError):
-                    # 如果无法转换为整数，说明是错误信息，不进行异常判断
-                    pass
-        
-        if "count_init" in results:
-            self.log(f"设备: {results['count_init']}")
-
-        if "sum_switch" in results:
-            self.log(f"设备: {results['sum_switch']}")
-
-        if "clean_switch" in results:
-            self.log(f"设备: {results['clean_switch']}")
-
-        if "check_time" in results:
-            self.log(f"设备: {results['check_time']}")
-
-        if "output_log" in results:
-            self.log(f"设备: {results['output_log']}")
-
-        if "upgrade_program" in results:
-            self.log(f"设备: {results['upgrade_program']}")
-
-        if "screenshot" in results:
-            self.log(f"设备: {results['screenshot']}")
     
     def on_query_error(self, device_id, error_msg):
         """处理查询错误"""
@@ -954,193 +730,26 @@ class MainWindow(BaseWindow):
 
     def on_monitor_result(self, device_data):
         """处理监控结果并自动导出到Excel"""
+        options = {
+            'monitor_time': self.control_panel.monitor_time_check.isChecked(),
+            'monitor_boot': self.control_panel.monitor_boot_check.isChecked(),
+            'monitor_start_count': self.control_panel.monitor_start_count_check.isChecked(),
+        }
         try:
-            self.export_monitor_results_to_excel(device_data)
+            self.excel_exporter.export(
+                device_data,
+                self.dev_type,
+                self.device_list_view.get_devices(),
+                options,
+                self.format_time_to_minute,
+            )
         except Exception as e:
             self.log(f"自动导出Excel失败: {str(e)}", is_error=True)
-    
-    def export_monitor_results_to_excel(self, device_data):
-        """导出监控结果到Excel文件"""
-        try:
-            import pandas as pd
-        except ImportError:
-            self.log("导出Excel失败：未找到pandas模块。请运行 'pip install pandas' 安装依赖", is_error=True)
-            return
-        
-        import os
-        from datetime import datetime
-        
-        # 初始化Excel文件名，只在第一次创建时生成
-        if not self.excel_file:
-            # 确保output/excel目录存在
-            excel_dir = './output/excel'
-            os.makedirs(excel_dir, exist_ok=True)
-            # 生成文件名，格式：[dev_type]_[yy-mm-dd_HH-MM-SS].xlsx
-            current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            self.excel_file = f'{excel_dir}/{self.dev_type}_{current_time}.xlsx'
-        else:
-            # 确保目录存在
-            excel_dir = os.path.dirname(self.excel_file)
-            if excel_dir:
-                os.makedirs(excel_dir, exist_ok=True)
-        
-        # 创建数据列表
-        data = []
-        
-        # 确定要导出的字段
-        fields = {
-            '系统时间': 'system_time',
-            '设备ID': 'id',
-            'IP地址': 'ip',
-            'MAC地址': 'mac_address',
-            '设备名称': 'device_name'
-        }
-        
-        # 根据监控选项动态添加字段
-        if self.control_panel.monitor_time_check.isChecked():
-            fields['设备时间'] = 'initial_card_time'
-            fields['时间差'] = 'initial_time_diff'
-        if self.control_panel.monitor_boot_check.isChecked():
-            fields['启动时间'] = 'last_boot_time'
-            fields['运行时长'] = 'last_uptime'
-        if self.control_panel.monitor_start_count_check.isChecked():
-            fields['播放器启动次数'] = 'last_start_count'
-        
-        # 获取当前系统时间
-        current_system_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        
-        for device_id, info in device_data.items():
-            # 准备一行数据
-            row = {}
-            
-            # 填充固定字段
-            row['系统时间'] = current_system_time
-            row['设备ID'] = device_id
-            
-            # 找到对应的设备信息
-            device_info = next((d for d in self.device_list_view.get_devices() if d['id'] == device_id), None)
-            if device_info:
-                row['IP地址'] = device_info.get('ip', '未知')
-                row['MAC地址'] = device_info.get('mac_address', '未知')
-                row['设备名称'] = device_info.get('device_name', '未知')
-            else:
-                row['IP地址'] = '未知'
-                row['MAC地址'] = '未知'
-                row['设备名称'] = '未知'
-            
-            # 填充动态字段
-            if self.control_panel.monitor_time_check.isChecked():
-                row['设备时间'] = info.get('last_card_time', info.get('initial_card_time', 'N/A'))
-                time_diff = info.get('last_time_diff', info.get('initial_time_diff', 'N/A'))
-                row['时间差'] = f"{time_diff}秒" if time_diff != 'N/A' else time_diff
-            
-            if self.control_panel.monitor_boot_check.isChecked():
-                # 格式化启动时间到分钟
-                boot_time = info.get('last_boot_time', 'N/A')
-                row['启动时间'] = self.format_time_to_minute(boot_time)
-                row['运行时长'] = info.get('last_uptime', 'N/A')
-            
-            if self.control_panel.monitor_start_count_check.isChecked():
-                row['播放器启动次数'] = info.get('last_start_count', 'N/A')
-            
-            data.append(row)
-        
-        # 创建DataFrame
-        df = pd.DataFrame(data)
-        
-        # 写入Excel文件
-        try:
-            # 检查文件是否存在，决定是否需要写入表头
-            file_exists = os.path.exists(self.excel_file)
-            
-            # 检查是否有xlsxwriter库
-            try:
-                import xlsxwriter
-                # 使用xlsxwriter引擎
-                engine = 'xlsxwriter'
-            except ImportError:
-                # 如果没有xlsxwriter，使用默认引擎
-                engine = None
-                
-            # 写入数据到Excel文件
-            if file_exists:
-                # 文件已存在，追加数据而不写入表头
-                # 读取现有数据
-                existing_df = pd.read_excel(self.excel_file)
-                # 合并数据
-                merged_df = pd.concat([existing_df, df])
-                # 使用xlsxwriter引擎保存并调整列宽
-                if engine == 'xlsxwriter':
-                    with pd.ExcelWriter(self.excel_file, engine=engine) as writer:
-                        # 写入合并后的数据
-                        merged_df.to_excel(writer, index=False, sheet_name='设备监控数据')
-                        # 获取工作表
-                        worksheet = writer.sheets['设备监控数据']
-                        
-                        # 模拟autofit功能：计算每列的最大宽度并设置
-                        for col_num, col_name in enumerate(merged_df.columns):
-                            # 获取当前列所有非空数据的文本长度
-                            col_values = merged_df[col_name].dropna().astype(str)
-                            # 找出最大文本长度，包含列名长度
-                            max_length = max([len(str(x)) for x in col_values] + [len(col_name)]) + 15  # 加2作为边距
-                            # 设置列宽，最大不超过50
-                            worksheet.set_column(col_num, col_num, min(max_length, 50))
-                else:
-                    # 没有xlsxwriter时直接保存
-                    merged_df.to_excel(self.excel_file, index=False, sheet_name='设备监控数据')
-            else:
-                # 文件不存在，创建新文件并写入表头
-                with pd.ExcelWriter(self.excel_file, engine=engine) as writer:
-                    # 写入数据
-                    df.to_excel(writer, index=False, sheet_name='设备监控数据')
-                    
-                    # 如果使用xlsxwriter引擎，设置列宽
-                    if engine == 'xlsxwriter':
-                        # 获取工作表
-                        worksheet = writer.sheets['设备监控数据']
-                        
-                        # 模拟autofit功能：计算每列的最大宽度并设置
-                        for col_num, col_name in enumerate(df.columns):
-                            # 获取当前列所有非空数据的文本长度
-                            col_values = df[col_name].dropna().astype(str)
-                            # 找出最大文本长度，包含列名长度
-                            max_length = max([len(str(x)) for x in col_values] + [len(col_name)]) + 15  # 加2作为边距
-                            # 设置列宽，最大不超过50
-                            worksheet.set_column(col_num, col_num, min(max_length, 50))
-        except Exception as e:
-            self.log(f"写入Excel文件时出错: {str(e)}", is_error=True)
-            return
-        
-        # 记录导出日志，统一使用正斜杠
-        excel_path = os.path.abspath(self.excel_file).replace('\\', '/')
-        self.log(f"监控结果已成功导出到 {excel_path}")
-    
+
     def log(self, message, is_error=False, is_warning=False):
         """记录日志，支持错误(红色)、警告(黄色)和正常(黑色)消息"""
         self.result_display_view.log(message, is_error, is_warning)
         
-    def open_error_log_in_notepad(self):
-        """打开记事本显示错误日志，并处理进程冲突"""
-        import subprocess
-        import os
-        from config import error_log_file
-        
-        # 确保错误日志文件存在
-        if not os.path.exists(error_log_file):
-            with open(error_log_file, 'w') as f:
-                f.write("# 错误日志文件\n")
-        
-        # 如果已经有记事本打开，先关闭它
-        if self.notepad_process:
-            try:
-                self.notepad_process.terminate()
-                self.notepad_process.wait(timeout=3)
-            except:
-                pass  # 如果关闭失败，继续执行下一步
-        
-        # 打开新的记事本
-        self.notepad_process = subprocess.Popen(['notepad.exe', error_log_file])
-    
     def format_time_to_minute(self, time_str):
         """将时间字符串格式化为精确到分钟"""
         if time_str == 'N/A' or not time_str:
@@ -1247,153 +856,32 @@ class MainWindow(BaseWindow):
                 return
         
         self.stop_monitor()
-        
-        # 停止设备查找线程
-        if hasattr(self, 'find_dev_Thread') and self.find_dev_Thread and self.find_dev_Thread.isRunning():
-            self.find_dev_Thread.stop()
-            self.find_dev_Thread.wait()
-        
-        # 清理可能遗留的查询线程（向后兼容）
-        for thread in self.query_threads:
-            if thread.isRunning():
-                thread.quit()
-                thread.wait()
+        self.refresh_controller.stop()
         event.accept()
     
     def refresh_device_list(self):
-        """刷新设备列表 - 使用异步线程避免阻塞主线程"""
-
+        """刷新设备列表 - 通过控制器异步执行，避免阻塞主线程"""
         try:
-            # 如果已有线程在运行，先停止
-            if hasattr(self, 'find_dev_Thread') and self.find_dev_Thread and self.find_dev_Thread.isRunning():
-                self.find_dev_Thread.stop()
-                self.find_dev_Thread.wait()
-            
-            # 获取当前查询设备类型
-            dev_type = self.control_panel.dev_type
-            # 禁用刷新按钮
             self.control_panel.refresh_button.setDisabled(True)
-            # 初始化devices数组
             self.devices = []
-            
-            # 创建异步获取设备列表线程
-            from service.tool_service import TOOLS_DIR
-            self.find_dev_Thread = GetDeviceListThread(
-                dev_type=dev_type,
-                tools_dir=TOOLS_DIR,
-                timeout=60  # 60秒超时
-            )
-            
-            # 连接信号
-            self.find_dev_Thread.progress_signal.connect(self.on_find_device_progress)
-            self.find_dev_Thread.raw_list_signal.connect(self.on_raw_device_list_received)
-            self.find_dev_Thread.error_signal.connect(self.on_find_device_error)
-            self.find_dev_Thread.finished_signal.connect(self.on_find_device_finished)
-            
-            # 启动线程
-            self.find_dev_Thread.start()
-            
+            self.refresh_controller.refresh(self.control_panel.dev_type)
         except Exception as e:
             self.log(f"刷新设备列表失败: {str(e)}", is_error=True)
             self.control_panel.refresh_button.setEnabled(True)
-            import traceback
-            print(traceback.format_exc())
-    
-    def on_find_device_progress(self, message):
-        """设备查找进度回调"""
-        self.control_panel.update_refresh_status(message)
-    
-    def on_raw_device_list_received(self, raw_lines):
-        """接收到原始设备列表后的处理"""
-        try:
-            dev_type = self.control_panel.dev_type
-            pattern = dev_type.replace('-', '|')
-            
-            if not raw_lines:
-                self.devices = []
-                self.device_info_to_list()
-                return
-            
-            self.log(f"开始获取 {len(raw_lines)} 台设备的详细信息...")
-            
-            # 创建GetDeviceInfoManager线程池处理详细信息
-            self.Manager = GetDeviceInfoManager(pattern, max_workers=4, queue_size=len(raw_lines))
-            self.Manager.taskCompleted.connect(self.refresh_device_flash)
-            self.Manager.allTasksCompleted.connect(self.device_info_to_list)
-            
-            # 提交任务
-            for line in raw_lines:
-                self.Manager.submit_task(line)
-                
-        except Exception as e:
-            self.log(f"处理设备列表时出错: {str(e)}", is_error=True)
-            self.control_panel.refresh_button.setEnabled(True)
-    
-    def on_find_device_error(self, error_msg):
-        """设备查找出错回调"""
+
+    def on_devices_ready(self, devices):
+        """设备信息收集完成：更新表格与状态栏。"""
+        self.devices = devices
+        self.update_device_list(devices)
+        self.control_panel.update_refresh_status(f"当前设备数: {len(devices)}")
+        self.log(f"设备列表已刷新，共 {len(devices)} 台设备")
+
+    def on_refresh_failed(self, error_msg):
+        """设备查找失败回调。"""
         self.log(error_msg, is_error=True)
         self.control_panel.update_refresh_status(error_msg, is_error=True)
         self.control_panel.refresh_button.setEnabled(True)
-    
-    def on_find_device_finished(self):
-        """设备查找线程完成回调"""
-        # 清理线程引用
-        if hasattr(self, 'find_dev_Thread'):
-            self.find_dev_Thread = None
 
-    def refresh_device_flash(self, device_info):
-        """执行完成后执行的操作"""
-        if device_info:
-            self.devices.append(device_info)
-    def device_info_to_list(self):
-        # print(f"device_info_to_list {self.devices}")
-        self.Manager.check_timer.stop()
-        self.Manager.taskCompleted.disconnect()
-        self.Manager.allTasksCompleted.disconnect()
-        self.Manager = None
-        try:
-            self.update_device_list(self.devices)
-
-            # 更新刷新状态标签
-            self.control_panel.update_refresh_status(f"当前设备数: {len(self.devices)}")
-
-            self.log(f"设备列表已刷新，共 {len(self.devices)} 台设备")
-
-        except Exception as e:
-            self.log(f"刷新设备列表失败: {str(e)}")
-
+    def on_refresh_finished(self):
+        """设备查找线程结束：恢复刷新按钮。"""
         self.control_panel.refresh_button.setEnabled(True)
-
-    def monitor_device(self, device):
-        """监控单个设备"""
-        try:
-            # 获取设备时间
-            device_time = self.get_device_time(device)
-            # 获取当前时间
-            current_time = datetime.now()
-            # 计算时间差
-            time_diff = (current_time - device_time).total_seconds()
-            # 写入Excel（确保每次都写最新的时间和时间差）
-            self.write_to_excel(device, device_time, time_diff)
-        except Exception as e:
-            # 写入异常到 device_error.txt
-            with open('device_error.txt', 'a', encoding='utf-8') as f:
-                f.write(f"{datetime.now()} 设备:{device} 获取时间异常: {str(e)}\n")
-
-    def write_to_excel(self, device, device_time, time_diff):
-        """写入设备时间和时间差到Excel"""
-        # 优化：每次写入最新数据
-        import pandas as pd
-        import os
-        row = {
-            '设备': device,
-            '设备时间': device_time,
-            '与电脑当前的时间差': time_diff,
-            '系统时间': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        file = 'device_time.xlsx'
-        df = pd.DataFrame([row])
-        if os.path.exists(file):
-            old = pd.read_excel(file)
-            df = pd.concat([old, df], ignore_index=True)
-        df.to_excel(file, index=False)
