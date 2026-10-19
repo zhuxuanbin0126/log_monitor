@@ -55,6 +55,7 @@ class MainWindow(BaseWindow):
         self.failed_devices = []
         self.current_query_type = None
         self.getdevice_num = 0
+        self._discovered_count = 0
         
         # 初始化日志文件
         base_dir = get_base_dir(self.dev_type)
@@ -112,6 +113,7 @@ class MainWindow(BaseWindow):
         # 设备刷新控制器信号连接
         self.refresh_controller.progress.connect(self.control_panel.update_refresh_status)
         self.refresh_controller.devices_ready.connect(self.on_devices_ready)
+        self.refresh_controller.device_found.connect(self.on_device_found)
         self.refresh_controller.failed.connect(self.on_refresh_failed)
         self.refresh_controller.finished.connect(self.on_refresh_finished)
 
@@ -871,6 +873,7 @@ class MainWindow(BaseWindow):
         try:
             self.control_panel.refresh_button.setDisabled(True)
             self.devices = []
+            self._discovered_count = 0
             self.refresh_controller.refresh(self.control_panel.dev_type)
         except Exception as e:
             self.log(f"刷新设备列表失败: {str(e)}", is_error=True)
@@ -881,6 +884,7 @@ class MainWindow(BaseWindow):
         try:
             self.control_panel.refresh_button.setDisabled(True)
             self.devices = []
+            self._discovered_count = 0
             self.refresh_controller.refresh(self.control_panel.dev_type, targets)
         except Exception as e:
             self.log(f"手动找卡失败: {str(e)}", is_error=True)
@@ -926,6 +930,13 @@ class MainWindow(BaseWindow):
         self.control_panel.enable_adb_button.setEnabled(True)
         self.log(f"开启 ADB 完成：成功 {ok_count}/{total}")
         self.enable_adb_worker = None
+
+    def on_device_found(self, device_id, ip):
+        """找卡「发现即上报」：先把即时反馈显示出来，设备详情随后补全。"""
+        self._discovered_count += 1
+        self.control_panel.update_refresh_status(
+            f"已发现 {self._discovered_count} 台设备（正在补全信息...）")
+        logger.debug("发现设备 %s (%s)", device_id, ip)
 
     def on_devices_ready(self, devices):
         """设备信息收集完成：更新表格与状态栏。"""

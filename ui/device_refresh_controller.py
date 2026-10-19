@@ -14,6 +14,8 @@ class DeviceRefreshController(QObject):
 
     progress = pyqtSignal(str)
     devices_ready = pyqtSignal(list)
+    device_found = pyqtSignal(str, str)
+    """找卡过程中「发现即上报」``(device_id, ip)``（仅新 UDP 通道提供）。"""
     failed = pyqtSignal(str)
     finished = pyqtSignal()
 
@@ -40,6 +42,10 @@ class DeviceRefreshController(QObject):
         self._thread = self._create_thread(dev_type, targets)
         self._thread.progress_signal.connect(self.progress)
         self._thread.raw_list_signal.connect(self._on_raw_list)
+        # 新 UDP 通道支持「发现即上报」，用于 UI 即时反馈（旧 DeviceId.exe 通道没有）
+        found_signal = getattr(self._thread, 'device_found', None)
+        if found_signal is not None:
+            found_signal.connect(self.device_found)
         self._thread.error_signal.connect(self._on_error)
         self._thread.finished_signal.connect(self._on_thread_finished)
         self._thread.start()

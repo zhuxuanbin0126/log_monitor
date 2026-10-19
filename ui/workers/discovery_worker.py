@@ -27,6 +27,8 @@ class DiscoveryThread(QThread):
 
     progress_signal = pyqtSignal(str)
     raw_list_signal = pyqtSignal(list)
+    device_found = pyqtSignal(str, str)
+    """发现一台设备即上报 ``(device_id, ip)``，供 UI 即时反馈（详情随后补全）。"""
     error_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()
 
@@ -45,20 +47,26 @@ class DiscoveryThread(QThread):
     def _stop_requested(self) -> bool:
         return self._should_stop
 
+    def _emit_found(self, device_id: str, ip: str) -> None:
+        """扫描线程回调：发现即发信号（不阻塞扫描）。"""
+        if not self._should_stop:
+            self.device_found.emit(device_id, ip)
+
     def run(self) -> None:
         try:
             if self.targets:
                 self.progress_signal.emit(
                     f"正在手动找卡(UDP 定向扫描): {self.targets}")
                 pairs = scan_targets(
-                    self.targets, on_device=None,
+                    self.targets, on_device=self._emit_found,
                     should_stop=self._stop_requested,
                 )
             else:
                 self.progress_signal.emit(
                     f"正在扫描设备(UDP 广播找卡, 超时 {self.timeout:.0f} 秒)...")
                 pairs = scan_devices(
-                    timeout=self.timeout, should_stop=self._stop_requested,
+                    timeout=self.timeout, on_device=self._emit_found,
+                    should_stop=self._stop_requested,
                 )
 
             if self._should_stop:

@@ -248,3 +248,19 @@ def test_discovery_thread_formats_lines_by_dev_type():
         ("XX-NA", "192.168.1.8"),
     ])
     assert lines == ["A3L-1A2B3C 192.168.1.5", "A3L-ZZZ 192.168.1.7"]
+
+
+def test_discovery_thread_reports_found_immediately():
+    """发现即上报：供 UI 即时反馈；停止后不再上报。"""
+    from ui.workers.discovery_worker import DiscoveryThread
+
+    thread = DiscoveryThread("A3L")
+    seen = []
+    thread.device_found.connect(lambda dev, ip: seen.append((dev, ip)))
+
+    thread._emit_found("A3L-1A2B3C", "192.168.1.5")  # pylint: disable=protected-access
+    assert seen == [("A3L-1A2B3C", "192.168.1.5")]
+
+    thread.stop()
+    thread._emit_found("A3L-ZZZ", "192.168.1.7")     # pylint: disable=protected-access
+    assert seen == [("A3L-1A2B3C", "192.168.1.5")]
