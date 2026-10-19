@@ -50,6 +50,8 @@ ADB_STATUS_UNSUPPORTED = "不支持"
 ADB_STATUS_UNKNOWN = "未知"
 
 _ETHERNET_TYPE = "Ethernet"
+_ETHERNET_KEY = "Ethernet"
+"""有线网络设置项（设置参数6）；旧固件 NetworkInfo 不含以太网 mac 时用它兜底取 mac"""
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -77,6 +79,15 @@ def parse_mac(network_info: Any) -> str:
             if mac:
                 return mac
     return NA
+
+
+def parse_ethernet_mac(ethernet: Any) -> str:
+    """从 ``Ethernet``（有线网络设置项）取 ``mac``。
+
+    旧固件的 ``NetworkInfo.interfaces`` 可能不含以太网条目（实测 A6L/OTA 1.2.8.0），
+    此时回退到该设置项回读的 ``reply.data.Ethernet.mac``。
+    """
+    return _text(_as_dict(ethernet).get("mac"))
 
 
 def parse_device_name(device_info: Any) -> str:
@@ -152,12 +163,24 @@ def parse_development(development: Any) -> Dict[str, Any]:
             "adb_mode": mode_raw, "adb_timer": timer}
 
 
-def parse_device_info(reply_data: Optional[dict]) -> Dict[str, Any]:
-    """把 Get 的 ``reply.data`` 解析为设备列表所需字段。"""
+def parse_device_info(reply_data: Optional[dict],
+                      ethernet: Optional[dict] = None) -> Dict[str, Any]:
+    """把 Get 的 ``reply.data`` 解析为设备列表所需字段。
+
+    Args:
+        reply_data: 主 Get 的 ``reply.data``（含 DeviceInfo/VersionInfo/NetworkInfo/Development）
+        ethernet: 可选的 ``reply.data.Ethernet``；当 ``NetworkInfo`` 里没有以太网 mac 时
+            作为 MAC 的回退来源（旧固件实测需要）
+    """
     data = _as_dict(reply_data)
     development = parse_development(data.get("Development"))
+
+    mac = parse_mac(data.get("NetworkInfo"))
+    if mac == NA and ethernet is not None:
+        mac = parse_ethernet_mac(ethernet)
+
     return {
-        "mac_address": parse_mac(data.get("NetworkInfo")),
+        "mac_address": mac,
         "device_name": parse_device_name(data.get("DeviceInfo")),
         "system_type": "Android",
         "ota_version": parse_ota_version(data.get("VersionInfo")),
@@ -169,11 +192,24 @@ def parse_device_info(reply_data: Optional[dict]) -> Dict[str, Any]:
     }
 
 
+def query_ethernet(host: str, *, port: int = PROTOCOL_PORT,
+                   connect_timeout: float = PROTOCOL_CONNECT_TIMEOUT,
+                   recv_timeout: float = PROTOCOL_RECV_TIMEOUT) -> Optional[Dict[str, Any]]:
+    """按需补查 ``Ethernet`` 设置项，返回 ``reply.data.Ethernet``；失败返回 None。"""
+    parsed = query_keys(host, [_ETHERNET_KEY], port=port,
+                        connect_timeout=connect_timeout, recv_timeout=recv_timeout)
+    data = extract_reply_data(parsed)
+    if not isinstance(data, dict):
+        return None
+    ethernet = data.get(_ETHERNET_KEY)
+    return ethernet if isinstance(ethernet, dict) else None
+
+
 def query_device_info(host: str, *, port: int = PROTOCOL_PORT,
                       connect_timeout: float = PROTOCOL_CONNECT_TIMEOUT,
                       recv_timeout: float = PROTOCOL_RECV_TIMEOUT,
                       keys: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
-    """一次 Get 取回设备信息并解析。
+    """一次 Get 取回设备信息并解析（MAC 缺失时按需补查 ``Ethernet``）。
 
     Args:
         host: 设备 IP
@@ -189,4 +225,15 @@ def query_device_info(host: str, *, port: int = PROTOCOL_PORT,
     if reply_data is None:
         logger.debug("设备 %s 协议设备信息查询失败（无有效 reply.data）", host)
         return None
-    return parse_device_info(reply_data)
+
+    info = parse_device_info(reply_data)
+
+    # 旧固件（实测 A6L/OTA 1.2.8.0）的 NetworkInfo 可能不含以太网 mac → 补查 Ethernet
+    if info["mac_address"] == NA:
+        ethernet = query_ethernet(host, port=port, connect_timeout=connect_timeout,
+                                  recv_timeout=recv_timeout)
+        if ethernet is not None:
+            info["mac_address"] = parse_ethernet_mac(ethernet)
+            logger.info("设备 %s MAC 回退取 Ethernet.mac: %s", host, info["mac_address"])
+
+    return info

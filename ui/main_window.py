@@ -17,6 +17,7 @@ from .query_result_presenter import QueryResultPresenter
 from .result_display_view import ResultDisplayView
 from .monitor_thread import MonitorThread
 from .serial_query_manager import SerialQueryManager
+from .workers.adb_enable_worker import EnableAdbWorker
 
 from service.tool_service import ToolService
 from service.file_service import FileService
@@ -44,6 +45,7 @@ class MainWindow(BaseWindow):
         self.excel_exporter = ExcelExporter(self.log)
         self.query_presenter = QueryResultPresenter(self.log, self.format_time_to_minute)
         self.refresh_controller = DeviceRefreshController(self)
+        self.enable_adb_worker = None
         
         # 启动时最大化窗口
         self.showMaximized()
@@ -92,6 +94,7 @@ class MainWindow(BaseWindow):
         # 控制面板信号连接
         self.control_panel.refresh_button.clicked.connect(self.refresh_device_list)
         self.control_panel.manual_find_clicked.connect(self.manual_find_device_list)
+        self.control_panel.enable_adb_clicked.connect(self.enable_adb_for_selected)
         self.control_panel.dev_type_combo.currentTextChanged.connect(self.on_dev_type_changed)
         # 修复：连接到正确的start_monitor_clicked信号，而不是按钮的clicked信号
         self.control_panel.start_monitor_clicked.connect(self.start_monitor)
@@ -858,6 +861,9 @@ class MainWindow(BaseWindow):
         
         self.stop_monitor()
         self.refresh_controller.stop()
+        if self.enable_adb_worker and self.enable_adb_worker.isRunning():
+            self.enable_adb_worker.stop()
+            self.enable_adb_worker.wait()
         event.accept()
     
     def refresh_device_list(self):
@@ -879,6 +885,47 @@ class MainWindow(BaseWindow):
         except Exception as e:
             self.log(f"手动找卡失败: {str(e)}", is_error=True)
             self.control_panel.refresh_button.setEnabled(True)
+
+    def enable_adb_for_selected(self):
+        """对勾选的 Android 设备下发协议 Set Development 开启 ADB（usb+tcp/永久）。"""
+        if self.enable_adb_worker and self.enable_adb_worker.isRunning():
+            self.log("开启 ADB 任务正在进行中，请稍候")
+            return
+
+        from service.device_utils import is_android_device
+
+        devices = list(getattr(self.device_list_view, 'selected_devices_info', []) or [])
+        targets = [(d['id'], d['ip']) for d in devices if is_android_device(d['id'])]
+        if not targets:
+            self.log("请先勾选 Android 类型的设备（Linux 设备无需开启 ADB）", is_error=True)
+            return
+
+        self.control_panel.enable_adb_button.setEnabled(False)
+        self.log(f"开始为 {len(targets)} 台 Android 设备开启 ADB（协议 Set Development）...")
+
+        self.enable_adb_worker = EnableAdbWorker(targets, self)
+        self.enable_adb_worker.progress_signal.connect(self.log)
+        self.enable_adb_worker.device_done.connect(self.on_enable_adb_device_done)
+        self.enable_adb_worker.finished_signal.connect(self.on_enable_adb_finished)
+        self.enable_adb_worker.start()
+
+    def on_enable_adb_device_done(self, device_id, ok, message):
+        """单台设备开启 ADB 完成：刷新表格与内存数据。"""
+        if ok:
+            self.device_list_view.update_device_info_field(device_id, 'adb_status', '开启')
+            for info in (self.devices or []):
+                if info.get('id') == device_id:
+                    info['adb_status'] = '开启'
+                    break
+            self.log(f"{device_id} 开启 ADB 成功 - {message}")
+        else:
+            self.log(f"{device_id} 开启 ADB 失败 - {message}", is_error=True)
+
+    def on_enable_adb_finished(self, ok_count, total):
+        """开启 ADB 任务结束：恢复按钮并汇总结果。"""
+        self.control_panel.enable_adb_button.setEnabled(True)
+        self.log(f"开启 ADB 完成：成功 {ok_count}/{total}")
+        self.enable_adb_worker = None
 
     def on_devices_ready(self, devices):
         """设备信息收集完成：更新表格与状态栏。"""

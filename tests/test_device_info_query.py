@@ -12,10 +12,11 @@ import threading
 import pytest
 
 import service.tool_service as ts
+import service.protocol.device_info_query as diq
 from service.protocol.device_info_query import (
     ADB_STATUS_OFF, ADB_STATUS_ON, ADB_STATUS_UNKNOWN, DEVICE_INFO_KEYS, NA,
-    parse_device_info, parse_development, parse_device_name, parse_mac,
-    parse_ota_version, parse_player_version, query_device_info,
+    parse_device_info, parse_development, parse_device_name, parse_ethernet_mac,
+    parse_mac, parse_ota_version, parse_player_version, query_device_info,
 )
 from service.protocol.frame import HEADER_SIZE, TYPE_REPLY, build_frame
 
@@ -203,6 +204,60 @@ def test_query_device_info_returns_none_on_non_success():
     with _MockGetDevice(reply) as server:
         assert query_device_info("127.0.0.1", port=server.port,
                                  connect_timeout=3.0, recv_timeout=2.0) is None
+
+
+# ---------------------------------------------------------------- MAC 回退（旧固件）
+
+def test_parse_ethernet_mac():
+    assert parse_ethernet_mac({"mac": "88:a6:00:0a:92:10"}) == "88:a6:00:0a:92:10"
+    assert parse_ethernet_mac({"dhcp": True}) == NA
+    assert parse_ethernet_mac(None) == NA
+
+
+def test_parse_device_info_uses_ethernet_fallback():
+    data = {"NetworkInfo": {"interfaces": [{"mac": "x", "type": "WiFi"}]},
+            "DeviceInfo": {"deviceName": "旧固件设备"}}
+    info = parse_device_info(data, ethernet={"mac": "88:A6:00:0A:92:10"})
+    assert info["device_name"] == "旧固件设备"
+    assert info["mac_address"] == "88:A6:00:0A:92:10"
+
+
+def test_query_device_info_falls_back_to_ethernet_get(monkeypatch):
+    """NetworkInfo 无以太网 mac 时，按需补查一次 Get ["Ethernet"] 取 mac。"""
+    calls = []
+
+    def fake_query_keys(_host, keys, **_kw):
+        calls.append(list(keys))
+        if keys == ["Ethernet"]:
+            return {"module": "Get", "reply": {"result": "kSuccess", "data": {
+                "Ethernet": {"dhcp": True, "ip": "192.168.80.216",
+                             "mac": "88:a6:00:0a:92:10", "mask": "255.255.254.0"}}}}
+        return {"module": "Get", "reply": {"result": "kSuccess", "data": {
+            "NetworkInfo": {"interfaces": [{"mac": "x", "type": "WiFi"}]},
+            "VersionInfo": {"app": {"player": "2.12.9.7"}},
+            "DeviceInfo": {"deviceName": "A6L"}}}}
+
+    monkeypatch.setattr(diq, "query_keys", fake_query_keys)
+    info = diq.query_device_info("192.168.80.216")
+
+    assert info["mac_address"] == "88:a6:00:0a:92:10"
+    assert info["main_version"] == "2.12.9.7"
+    assert calls == [DEVICE_INFO_KEYS, ["Ethernet"]]
+
+
+def test_query_device_info_no_extra_get_when_mac_present(monkeypatch):
+    calls = []
+
+    def fake_query_keys(_host, keys, **_kw):
+        calls.append(list(keys))
+        return {"module": "Get", "reply": {"result": "kSuccess", "data": {
+            "NetworkInfo": {"interfaces": [{"mac": "AA:BB", "type": "Ethernet"}]}}}}
+
+    monkeypatch.setattr(diq, "query_keys", fake_query_keys)
+    info = diq.query_device_info("192.168.80.216")
+
+    assert info["mac_address"] == "AA:BB"
+    assert calls == [DEVICE_INFO_KEYS]      # 只一次往返，不补查
 
 
 # ---------------------------------------------------------------- ToolService 接线

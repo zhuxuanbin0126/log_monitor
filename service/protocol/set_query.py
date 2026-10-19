@@ -51,13 +51,27 @@ _PERMISSION_DENIED = "kPermissionDenied"
 
 
 def build_development_message(adb_mode: str, adb_timer: int = ADB_TIMER_ON,
-                              key: str = DEVELOPMENT_KEY) -> dict:
-    """构造完整的 ``Set Development`` 消息（含 key / log / tag）。"""
-    return build_envelope(
-        "Set",
-        {DEVELOPMENT_SETTING: {"adbMode": adb_mode, "adbTimer": int(adb_timer)}},
-        tag=DEVELOPMENT_SETTING, key=key, version=DEFAULT_VERSION,
-    )
+                              key: str = DEVELOPMENT_KEY, *,
+                              oms_enable: bool = False,
+                              oms_timer: int = 0) -> dict:
+    """构造完整的 ``Set Development`` 消息（含 key / log / tag）。
+
+    报文形如::
+
+        {"ask": {"Development": {"adbMode": "usb,tcp", "adbTimer": 0,
+                                 "omsEnable": false, "omsTimer": 0}},
+         "module": "Set", "tag": "Development", ...}
+
+    ``omsEnable`` / ``omsTimer`` 一并下发（默认关闭运维服务），与官方消息模板一致。
+    """
+    body = {
+        "adbMode": adb_mode,
+        "adbTimer": int(adb_timer),
+        "omsEnable": bool(oms_enable),
+        "omsTimer": int(oms_timer),
+    }
+    return build_envelope("Set", {DEVELOPMENT_SETTING: body},
+                          tag=DEVELOPMENT_SETTING, key=key, version=DEFAULT_VERSION)
 
 
 def build_keyevent_unlock_message() -> dict:
@@ -92,7 +106,8 @@ def _result_of(response: Optional[dict]) -> str:
 
 
 def set_development(host: str, adb_mode: str,
-                    adb_timer: int = ADB_TIMER_ON, *, port: int = PROTOCOL_PORT,
+                    adb_timer: int = ADB_TIMER_ON, *, oms_enable: bool = False,
+                    oms_timer: int = 0, port: int = PROTOCOL_PORT,
                     connect_timeout: float = PROTOCOL_CONNECT_TIMEOUT,
                     recv_timeout: float = PROTOCOL_RECV_TIMEOUT
                     ) -> Tuple[bool, str]:
@@ -102,6 +117,7 @@ def set_development(host: str, adb_mode: str,
         host: 设备 IP
         adb_mode: ``usb``（有线）/ ``tcp``（无线）/ ``usb,tcp``（两者都开）
         adb_timer: ``0`` 开启（永久）/ ``1`` 关闭
+        oms_enable / oms_timer: 运维服务开关与时长（一并下发，默认关闭）
         port: 协议端口
         connect_timeout / recv_timeout: 收发超时
 
@@ -115,7 +131,8 @@ def set_development(host: str, adb_mode: str,
         raise ValueError(f"非法 adbMode: {adb_mode!r}")
 
     verb = "开启" if int(adb_timer) == ADB_TIMER_ON else "关闭"
-    message = build_development_message(adb_mode, adb_timer)
+    message = build_development_message(adb_mode, adb_timer,
+                                       oms_enable=oms_enable, oms_timer=oms_timer)
     response = _send(host, message, port, connect_timeout, recv_timeout)
     if response is None:
         return False, "设备无响应（协议未返回或解析失败）"
@@ -130,7 +147,8 @@ def set_development(host: str, adb_mode: str,
 
         # 解锁成功后用**解锁 key** 重建消息并重发（与设备端语义一致）
         message = build_development_message(adb_mode, adb_timer,
-                                            key=KEYEVENT_UNLOCK_KEY)
+                                           key=KEYEVENT_UNLOCK_KEY,
+                                           oms_enable=oms_enable, oms_timer=oms_timer)
         response = _send(host, message, port, connect_timeout, recv_timeout)
         if response is None:
             return False, "解锁后重发失败（设备无响应）"

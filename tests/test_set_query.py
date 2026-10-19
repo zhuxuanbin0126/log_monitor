@@ -75,6 +75,11 @@ def _ok():
     return {"module": "Set", "reply": {"result": "kSuccess"}}
 
 
+def _dev_body(mode, timer):
+    """Development 请求体（omsEnable/omsTimer 一并下发，默认关闭）。"""
+    return {"adbMode": mode, "adbTimer": timer, "omsEnable": False, "omsTimer": 0}
+
+
 # ---------------------------------------------------------------- 报文形态
 
 def test_build_development_message_shape():
@@ -83,7 +88,7 @@ def test_build_development_message_shape():
     assert msg["tag"] == DEVELOPMENT_SETTING
     assert msg["key"] == DEVELOPMENT_KEY
     assert msg["version"] == 5
-    assert msg["ask"] == {DEVELOPMENT_SETTING: {"adbMode": "tcp", "adbTimer": 0}}
+    assert msg["ask"] == {DEVELOPMENT_SETTING: _dev_body("tcp", 0)}
     assert "log" in msg and "uuid" in msg
 
 
@@ -105,7 +110,7 @@ def test_set_development_success():
     assert ok is True
     assert "已通过协议开启 ADB" in msg
     sent = server.requests[0]
-    assert sent["ask"] == {DEVELOPMENT_SETTING: {"adbMode": "tcp", "adbTimer": 0}}
+    assert sent["ask"] == {DEVELOPMENT_SETTING: _dev_body("tcp", 0)}
     assert sent["key"] == DEVELOPMENT_KEY
 
 
@@ -116,7 +121,7 @@ def test_set_development_disable_uses_timer_off():
                                 recv_timeout=2.0)
     assert ok is True
     assert server.requests[0]["ask"] == {
-        DEVELOPMENT_SETTING: {"adbMode": "tcp", "adbTimer": 1}}
+        DEVELOPMENT_SETTING: _dev_body("tcp", ADB_TIMER_OFF)}
 
 
 def test_set_development_permission_denied_triggers_keyevent_retry():
@@ -177,7 +182,7 @@ def test_enable_all_adb_uses_both_modes():
                                connect_timeout=3.0, recv_timeout=2.0)
     assert ok is True
     assert server.requests[0]["ask"] == {
-        DEVELOPMENT_SETTING: {"adbMode": "usb,tcp", "adbTimer": 0}}
+        DEVELOPMENT_SETTING: _dev_body("usb,tcp", 0)}
 
 
 # ---------------------------------------------------------------- 推送后校验

@@ -12,6 +12,7 @@ class ControlPanel(QWidget):
     refresh_clicked = pyqtSignal()
     dev_type_changed = pyqtSignal(str)
     manual_find_clicked = pyqtSignal(str)
+    enable_adb_clicked = pyqtSignal()
     start_monitor_clicked = pyqtSignal(int, bool, bool, bool, bool, str, bool)
     stop_monitor_clicked = pyqtSignal()
     query_selected_clicked = pyqtSignal(str)
@@ -183,12 +184,17 @@ class ControlPanel(QWidget):
         self.query_clean_switch_button = QPushButton("清空开关机次数")
         self.query_clean_switch_button.clicked.connect(lambda: self.query_selected_clicked.emit("clean_switch"))
         
+        # 协议下发 Set Development 开启 ADB（仅 Android 设备）
+        self.enable_adb_button = QPushButton("开启ADB")
+        self.enable_adb_button.clicked.connect(self.enable_adb_clicked.emit)
+        
         second_row_layout.addWidget(self.query_set_time_button)
         second_row_layout.addWidget(self.query_screenshot_button)
         second_row_layout.addWidget(self.query_upgrade_program_button)
         second_row_layout.addWidget(self.query_count_init_button)
         second_row_layout.addWidget(self.query_output_log_button)
         second_row_layout.addWidget(self.query_clean_switch_button)
+        second_row_layout.addWidget(self.enable_adb_button)
         second_row_layout.addStretch()
         
         query_layout.addLayout(second_row_layout)
@@ -264,6 +270,7 @@ class ControlPanel(QWidget):
         self.query_count_init_button.setEnabled(not is_monitoring)
         self.query_output_log_button.setEnabled(not is_monitoring)
         self.query_clean_switch_button.setEnabled(not is_monitoring)
+        self.enable_adb_button.setEnabled(not is_monitoring)
         
     def on_screenshot_path_clicked(self):
         """截图存储位置选择按钮点击事件"""
