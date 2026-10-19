@@ -33,6 +33,7 @@ from .query_service import get_device_status, get_protocol_query_service
 from .readback_query import (
     FILE_TRANSFER_MODE_SOCKET, READBACK_TARGET_SCREENSHOT,
     SCREENSHOT_FILE_OPTIONS, build_readback_message, query_screenshot,
+    screenshot_supported,
 )
 from .set_query import (
     disable_wireless_adb, enable_all_adb, enable_wired_adb, enable_wireless_adb,
@@ -51,6 +52,6 @@ __all__ = [
     'DEVICE_INFO_KEYS', 'parse_device_info', 'parse_development', 'query_device_info',
     'FileDownload', 'FileDownloadState', 'receive_file',
     'READBACK_TARGET_SCREENSHOT', 'SCREENSHOT_FILE_OPTIONS', 'FILE_TRANSFER_MODE_SOCKET',
-    'build_readback_message', 'query_screenshot',
+    'build_readback_message', 'query_screenshot', 'screenshot_supported',
 ]
 

@@ -96,6 +96,13 @@ CONNECTION_STABILIZE_SECONDS = 2
 DEFAULT_SCREENSHOT_PATH = "./screenshot"
 """默认截图存储路径"""
 
+QUERY_MAX_WORKERS = 8
+"""协议可用设备的最大并发查询数：每台设备是独立 TCP，可安全高并发"""
+
+LEGACY_QUERY_MAX_WORKERS = 2
+"""无协议设备（走 adb/SSH）的最大并发数：adb server 为单进程，过高会相互干扰"""
+
+
 # ============================================================
 # 日志目录配置
 # ============================================================

@@ -57,10 +57,24 @@ RECV_CHUNK = 65536
 TAIL_SECONDS = 1.0
 """收到 0x8005 后再多等一小段，收尾可能滞后的数据块"""
 
+FILE_HEAD_GRACE_SECONDS = 5.0
+"""收到 JSON 回复后，等待文件头的宽限（秒）：超时仍未给文件头即提前收尾。
+
+设备侧完成截图（实测 4~5s）后会**立即**回 JSON + 文件头，故该宽限足够；
+设置它是为了避免设备只回 JSON（如 ``kNotImplemented``）时白等满接收超时。
+"""
+
 
 def build_bin_frame(mtype: int, body: bytes = b"") -> bytes:
     """4 字节通用帧（文件传输应答 / 心跳应答）。"""
     return struct.pack("<HH", 4 + len(body), mtype) + body
+
+
+def reply_result(reply: Optional[dict]) -> str:
+    """取 reply 的 result 码；结构不符返回空串。"""
+    if not isinstance(reply, dict):
+        return ""
+    return str(reply.get("result", ""))
 
 
 def parse_file_head(body: bytes) -> Dict[str, Any]:
@@ -223,15 +237,17 @@ def _handshake(sock: socket.socket, greet_timeout: float = 0.15) -> None:
 
 def _pump(sock: socket.socket, state: FileDownloadState, recv_timeout: float,
           tail_seconds: float) -> None:
-    """接收循环：读字节 → 喂状态机 → 立即回设备所需应答。"""
+    """接收循环：读字节 → 喂状态机 → 立即回设备所需应答（含提前收尾）。"""
     deadline = time.monotonic() + recv_timeout
     tail_until = 0.0
+    reply_seen_at = 0.0
     while True:
         now = time.monotonic()
         wait = (tail_until - now) if state.eof else (deadline - now)
         if wait <= 0:
             break
-        sock.settimeout(max(0.5, wait))
+        # 每次 recv 最多阻塞 1s：保证下面的「提前收尾」判定能周期性执行
+        sock.settimeout(max(0.5, min(wait, 1.0)))
         try:
             chunk = sock.recv(RECV_CHUNK)
         except socket.timeout:
@@ -247,3 +263,18 @@ def _pump(sock: socket.socket, state: FileDownloadState, recv_timeout: float,
                 return
         if state.eof and not tail_until:
             tail_until = time.monotonic() + tail_seconds
+        if state.reply is not None and not reply_seen_at:
+            reply_seen_at = time.monotonic()
+
+        # 提前收尾①：回复为非成功（如 kNotImplemented）→ 设备不会再推文件
+        if state.head is None and reply_seen_at and reply_result(state.reply) != "kSuccess":
+            logger.debug("文件通道回复非成功(%s)，提前收尾", reply_result(state.reply))
+            break
+        # 提前收尾②：成功回复后迟迟不给文件头（超出宽限）→ 不再白等。
+        # 注：**不**按「已收字节数 == 文件头 size」提前收尾 —— 0x8005 与 0x8006
+        # 应答是设备判定本次传输完成的依据，跳过会留下未收尾的传输状态。
+        if (state.head is None and reply_seen_at
+                and time.monotonic() - reply_seen_at >= FILE_HEAD_GRACE_SECONDS):
+            logger.debug("收到成功回复但 %.1fs 未收到文件头，提前收尾",
+                         FILE_HEAD_GRACE_SECONDS)
+            break

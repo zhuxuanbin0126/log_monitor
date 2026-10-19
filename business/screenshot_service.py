@@ -27,12 +27,17 @@ class ScreenshotService:
     def _try_protocol_screenshot(ip, target_file) -> bool:
         """协议截图并落盘；成功返回 True（失败返回 False，由调用方回落 adb）。"""
         try:
-            from service.protocol import query_screenshot
+            from service.protocol import query_screenshot, screenshot_supported
+            if not screenshot_supported(ip):
+                logger.info("设备 %s 未确认支持协议（支持面缓存为负），直接走 adb 截图", ip)
+                return False
+            logger.info("设备 %s 开始协议截图（ReadBack ScreenShot/Socket 文件通道）", ip)
             image = query_screenshot(ip)
         except Exception as exc:  # pylint: disable=broad-except
-            logger.debug("设备 %s 协议截图异常，回落 adb: %s", ip, exc)
+            logger.info("设备 %s 协议截图异常，回落 adb: %s", ip, exc)
             return False
         if not image:
+            logger.info("设备 %s 协议截图未取到图片数据，回落 adb", ip)
             return False
         with open(target_file, 'wb') as file_handle:
             file_handle.write(image)

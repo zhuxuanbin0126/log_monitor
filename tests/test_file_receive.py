@@ -9,6 +9,7 @@ import json
 import socket
 import struct
 import threading
+import time
 
 from service.protocol import file_receive as fr
 from service.protocol.frame import TYPE_HEARTBEAT, TYPE_REQUEST, TYPE_REPLY, build_frame
@@ -213,3 +214,58 @@ def test_receive_file_head_without_data_is_reported():
     assert download is not None
     assert download.ok is False
     assert download.name == "empty.png"
+
+
+class _ReplyOnlyDevice:
+    """只回一条 JSON（无文件头）后保持静默的假设备：用于验证提前收尾。"""
+
+    def __init__(self, reply_obj):
+        self._reply = reply_obj
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(1)
+        self.port = self._sock.getsockname()[1]
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def _serve(self):
+        try:
+            conn, _ = self._sock.accept()
+            conn.settimeout(10)
+            head = conn.recv(4)
+            frame_len = struct.unpack("<H", head[:2])[0]
+            remaining = frame_len - 4
+            got = b""
+            while len(got) < remaining:
+                piece = conn.recv(remaining - len(got))
+                if not piece:
+                    break
+                got += piece
+            conn.sendall(_json_frame(self._reply))
+            time.sleep(3.0)          # 故意不给文件头，且不关连接
+            conn.close()
+        except OSError:
+            pass
+
+
+def test_receive_file_exits_early_on_non_success_reply(monkeypatch):
+    """设备回 kNotImplemented（无文件头）时不应白等满接收超时。"""
+    monkeypatch.setattr(fr, "FILE_HEAD_GRACE_SECONDS", 0.3)
+    device = _ReplyOnlyDevice({"module": "ReadBack",
+                               "reply": {"result": "kNotImplemented"}})
+    device.start()
+
+    frame = build_frame(build_readback_message(
+        "ScreenShot", file_transfer_mode=2), TYPE_REQUEST)
+    started = time.monotonic()
+    reply, download = fr.receive_file(
+        "127.0.0.1", frame, port=device.port, connect_timeout=2.0,
+        recv_timeout=30.0, tail_seconds=0.2)
+    elapsed = time.monotonic() - started
+
+    assert reply["result"] == "kNotImplemented"
+    assert download is None
+    assert elapsed < 5.0, f"提前收尾失效，白等了 {elapsed:.1f}s"

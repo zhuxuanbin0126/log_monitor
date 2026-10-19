@@ -22,8 +22,9 @@ from config import (
 )
 from service.logging_service import get_logger
 
+from .command_query import is_protocol_supported
 from .envelope import DEFAULT_VERSION, build_envelope
-from .file_receive import receive_file
+from .file_receive import receive_file, reply_result
 from .frame import TYPE_REQUEST, build_frame
 
 logger = get_logger(__name__)
@@ -50,13 +51,6 @@ def build_readback_message(target: str, options: Optional[Dict[str, Any]] = None
     return build_envelope("ReadBack", ask, version=version)
 
 
-def _result_of(reply: Optional[dict]) -> str:
-    """取回复的 result 码；结构不符返回空串。"""
-    if not isinstance(reply, dict):
-        return ""
-    return str(reply.get("result", ""))
-
-
 def query_screenshot(host: str, *, port: int = PROTOCOL_PORT,
                      connect_timeout: float = PROTOCOL_CONNECT_TIMEOUT,
                      recv_timeout: float = PROTOCOL_FILE_RECV_TIMEOUT
@@ -72,6 +66,7 @@ def query_screenshot(host: str, *, port: int = PROTOCOL_PORT,
         READBACK_TARGET_SCREENSHOT, SCREENSHOT_FILE_OPTIONS,
         file_transfer_mode=FILE_TRANSFER_MODE_SOCKET)
     frame = build_frame(message, TYPE_REQUEST)
+    logger.info("设备 %s 尝试协议截图（ReadBack ScreenShot/%s）", host, frame[:4].hex())
     reply, download = receive_file(host, frame, port=port,
                                    connect_timeout=connect_timeout,
                                    recv_timeout=max(recv_timeout,
@@ -79,7 +74,7 @@ def query_screenshot(host: str, *, port: int = PROTOCOL_PORT,
 
     if download is None or not download.ok:
         logger.info("设备 %s 协议截图失败: result=%s, 文件数据=%s",
-                    host, _result_of(reply),
+                    host, reply_result(reply),
                     "未收到" if download is None else len(download.data))
         return None
 
@@ -92,3 +87,8 @@ def query_screenshot(host: str, *, port: int = PROTOCOL_PORT,
     logger.info("设备 %s 协议截图成功: %s 字节, 文件名=%s, md5=%s",
                 host, len(download.data), download.name, download.md5)
     return download.data
+
+
+def screenshot_supported(host: str) -> bool:
+    """该设备当前是否可用协议截图（复用协议支持面缓存，避免不支持者白等）。"""
+    return is_protocol_supported(host)

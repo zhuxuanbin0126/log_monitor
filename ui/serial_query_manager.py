@@ -7,6 +7,8 @@ from service.adb_service import ADBService
 from service.adb_device_manager import ADBDeviceManager
 from service.device_utils import is_android_device
 from service.logging_service import get_logger
+from service.protocol import get_device_status
+from config import LEGACY_QUERY_MAX_WORKERS, QUERY_MAX_WORKERS
 from business.query_dispatcher import build_query_dispatch
 
 logger = get_logger(__name__)
@@ -81,6 +83,15 @@ class SerialQueryManager(QThread):
     STATE_DONE = "DONE"
     STATE_ERROR = "ERROR"
 
+    PROTOCOL_ONLY_TYPES = frozenset({
+        "all", "time", "boot_time", "start_count", "sum_switch", "screenshot", "check_time",
+    })
+    """协议可取全的**信息类查询**：这些类型在协议可用时完全无需 adb/SSH 前置。
+
+    文件推送（``count_init`` / ``upgrade_program``）、日志导出（``output_log``）、
+    清理（``clean_switch``）仍依赖 adb/SSH，故不在此列。
+    """
+
     # 保存活跃的设备信息刷新线程引用，防止被 GC 销毁导致 QThread 崩溃
     _active_refreshers = set()
     
@@ -103,91 +114,151 @@ class SerialQueryManager(QThread):
         self.state_signal.emit(self._current_device, state)
         
     def run(self):
-        """逐个执行设备查询/操作，支持并行模式"""
+        """按「协议可用性」分池执行：协议池高并发，legacy（adb/SSH）池低并发。"""
         try:
             total_devices = len(self.devices_info)
-            # 分离 ADB 设备和 SSH 设备
-            adb_devices = [d for d in self.devices_info if is_android_device(d[0])]
+            android_devices = [d for d in self.devices_info if is_android_device(d[0])]
             ssh_devices = [d for d in self.devices_info if not is_android_device(d[0])]
-            
-            # 先并行处理 ADB 设备
-            if adb_devices:
-                self._process_adb_parallel(adb_devices, total_devices)
-            
-            # 再串行处理 SSH/Linux 设备
+
+            protocol_devices, legacy_devices = self._split_by_protocol(android_devices)
+            logger.info(
+                "[串行管理器] 查询类型=%s，共 %s 台：协议池 %s 台（并发 %s）、"
+                "adb/SSH 池 %s 台（并发 %s）、SSH 串行 %s 台",
+                self.query_type, total_devices, len(protocol_devices),
+                min(len(protocol_devices), QUERY_MAX_WORKERS) or 0,
+                len(legacy_devices),
+                min(len(legacy_devices), LEGACY_QUERY_MAX_WORKERS) or 0,
+                len(ssh_devices),
+            )
+
+            # 协议池：每台设备独立 TCP，可安全高并发
+            if protocol_devices:
+                self._process_parallel(protocol_devices, total_devices,
+                                      min(len(protocol_devices), QUERY_MAX_WORKERS))
+
+            # legacy 池：走 adb/SSH，adb server 单进程，低并发避免相互干扰
+            if legacy_devices:
+                self._process_parallel(legacy_devices, total_devices,
+                                      min(len(legacy_devices), LEGACY_QUERY_MAX_WORKERS))
+
+            # Linux 设备：SSH 串行
+            base = len(protocol_devices) + len(legacy_devices)
             for idx, (device_id, ip, password, system_type) in enumerate(ssh_devices):
                 if not self.is_running:
                     break
                 logger.info(
                     "[串行管理器] 开始处理设备 %s/%s: %s (%s)",
-                    idx + 1 + len(adb_devices), total_devices, device_id, ip,
-                )
+                    idx + 1 + base, total_devices, device_id, ip)
                 self._set_state(self.STATE_CONNECTING, device_id)
-                self.progress_signal.emit(idx + 1 + len(adb_devices), total_devices)
+                self.progress_signal.emit(idx + 1 + base, total_devices)
                 self._process_single_device(device_id, ip, password, system_type, needs_adb=False)
-            
+
             self.finished_signal.emit(total_devices)
-            
+
         except Exception as e:
             self.error_signal.emit("Unknown", f"串行查询管理器出错: {str(e)}")
-    
-    def _process_adb_parallel(self, adb_devices, total_devices):
-        """并行处理 ADB 设备（每个设备独立 ADB 连接）"""
-        adb_count = len(adb_devices)
+
+    def _split_by_protocol(self, android_devices):
+        """按「协议是否可用」把 Android 设备分成协议池与 legacy 池。
+
+        仅当本次查询类型是**协议可取全**的信息类查询（见 ``PROTOCOL_ONLY_TYPES``）时
+        才做此拆分；文件推送/日志导出等仍走 adb/SSH，归入 legacy 池。
+        """
+        if self.query_type not in self.PROTOCOL_ONLY_TYPES:
+            return [], list(android_devices)
+        protocol_devices, legacy_devices = [], []
+        for device in android_devices:
+            ip = device[1]
+            try:
+                supported = get_device_status(ip) is not None
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.debug("[串行管理器] 协议支持面判定失败 %s: %s", ip, exc)
+                supported = False
+            (protocol_devices if supported else legacy_devices).append(device)
+        return protocol_devices, legacy_devices
+
+    def _process_parallel(self, devices, total_devices, workers):
+        """并行处理一批设备（每台设备内部自行决定走协议还是 adb/SSH）。"""
         completed = 0
         completed_lock = threading.Lock()
-        
-        def _handle_adb_device(device_info):
+
+        def _handle_device(device_info):
             nonlocal completed
             device_id, ip, password, system_type = device_info
             try:
-                self._process_single_device(device_id, ip, password, system_type, needs_adb=True)
+                self._process_single_device(device_id, ip, password, system_type,
+                                            needs_adb=is_android_device(device_id))
             finally:
                 with completed_lock:
                     completed += 1
                     current = completed
                 self.progress_signal.emit(current, total_devices)
-        
-        with ThreadPoolExecutor(max_workers=min(adb_count, 4)) as executor:
-            futures = [executor.submit(_handle_adb_device, d) for d in adb_devices]
+
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+            futures = [executor.submit(_handle_device, d) for d in devices]
             for f in as_completed(futures):
                 if not self.is_running:
                     break
                 try:
-                    f.result(timeout=120)
+                    f.result(timeout=180)
                 except Exception as e:
                     logger.warning("[并行管理器] 设备任务异常: %s", e)
     
-    def _process_single_device(self, device_id, ip, password, system_type, needs_adb=False):
-        """处理单个设备的完整查询流程"""
-        adb_just_enabled = False
+    def _protocol_ready(self, device_id, ip):
+        """该设备本次查询能否**完全**走协议（无需 adb/SSH 前置）。"""
+        if self.query_type not in self.PROTOCOL_ONLY_TYPES:
+            return False
+        if not is_android_device(device_id):
+            return False
         try:
-            # 只断开**本设备**的 adb 连接：并行处理多台设备时，
-            # 全局 `adb disconnect` 会误伤其它正在查询的设备
-            ADBService.disconnect_device(ip)
-        except Exception as e:
-            logger.warning("[串行管理器] 断开设备 %s 的ADB连接时出错: %s", ip, e)
-        self.msleep(300)
-        
+            return get_device_status(ip) is not None
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("[串行管理器] 协议支持面判定失败 %s: %s", ip, exc)
+            return False
+
+    def _process_single_device(self, device_id, ip, password, system_type, needs_adb=False):
+        """处理单个设备的完整查询流程。
+
+        **协议可取全的信息类查询**（``PROTOCOL_ONLY_TYPES``）在协议可用时跳过
+        adb connect 与 SSH 初始化 —— 这是「查询全部信息」单机也要等 >5s 的主因。
+        """
+        protocol_ready = self._protocol_ready(device_id, ip)
+        if protocol_ready:
+            logger.info("[串行管理器] %s(%s) 协议可用，跳过 adb/SSH 前置", device_id, ip)
+        else:
+            try:
+                # 只断开**本设备**的 adb 连接：并行处理多台设备时，
+                # 全局 `adb disconnect` 会误伤其它正在查询的设备
+                ADBService.disconnect_device(ip)
+            except Exception as e:
+                logger.warning("[串行管理器] 断开设备 %s 的ADB连接时出错: %s", ip, e)
+            self.msleep(300)
+
+        adb_just_enabled = False
         try:
             from business.device_monitor_service import DeviceMonitorService
             dev_type = device_id.split('-')[0] if '-' in device_id else 'C16H'
             monitor_service = DeviceMonitorService(dev_type)
-            
-            # Android 设备：使用 ADBDeviceManager 检测/开启网络 ADB
-            if needs_adb:
+
+            if not protocol_ready and needs_adb:
+                # Android 设备：检测/开启网络 ADB（仅协议不可用时才需要）
                 self._set_state(self.STATE_CONNECTING, device_id)
                 prev_status = ADBDeviceManager.get_cached_status(device_id)
+                logger.info("[串行管理器] %s 协议不可用，尝试确保网络 ADB 已开启", device_id)
                 adb_ok, serial = ADBDeviceManager.ensure_adb_connected(ip, password, device_id)
                 # 通知 UI 更新 ADB 状态
                 self.state_signal.emit(device_id, f"ADB:{'开启' if adb_ok else '未开启'}")
                 if adb_ok and prev_status != '开启':
                     adb_just_enabled = True
-            
-            # 始终初始化 SSH 连接（作为 fallback，部分旧逻辑仍依赖 SSH）
-            ToolService.initialize_connection(ip, password)
-            
+
+            if not protocol_ready:
+                # 初始化 SSH 连接（作为 adb 不可用时的 fallback）
+                ToolService.initialize_connection(ip, password)
+
             self._set_state(self.STATE_QUERYING)
+            logger.info("[串行管理器] %s 开始执行查询（类型=%s，通道=%s）",
+                        device_id, self.query_type,
+                        "协议" if protocol_ready else "adb/SSH")
 
             results = {}
             dispatch = build_query_dispatch(
@@ -202,25 +273,27 @@ class SerialQueryManager(QThread):
                 dispatch["all"]()
             else:
                 dispatch[self.query_type]()
-            
+
+            logger.info("[串行管理器] %s 查询完成，结果键=%s", device_id, sorted(results.keys()))
             self._set_state(self.STATE_DONE)
             self.result_signal.emit(device_id, results)
 
             # ADB 刚刚由未开启转为开启 → 后台异步刷新设备信息
             if adb_just_enabled:
                 self._start_info_refresher(device_id, ip, password)
-            
+
         except Exception as e:
             self._set_state(self.STATE_ERROR)
             error_msg = f"查询设备 {device_id} ({ip}) 时出错: {str(e)}"
             self.error_signal.emit(device_id, error_msg)
         
         finally:
-            try:
-                # 同上：并行场景下只断开本设备，避免误伤其它设备
-                ADBService.disconnect_device(ip)
-            except Exception as e:
-                logger.warning("[串行管理器] 设备 %s 操作完成后断开ADB连接时出错: %s", device_id, e)
+            if not protocol_ready:
+                try:
+                    # 同上：并行场景下只断开本设备，避免误伤其它设备
+                    ADBService.disconnect_device(ip)
+                except Exception as e:
+                    logger.warning("[串行管理器] 设备 %s 操作完成后断开ADB连接时出错: %s", device_id, e)
 
     def _start_info_refresher(self, device_id, ip, password):
         """启动后台线程刷新设备信息，并通过信号通知 UI"""
