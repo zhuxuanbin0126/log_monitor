@@ -165,9 +165,11 @@ class SerialQueryManager(QThread):
         """处理单个设备的完整查询流程"""
         adb_just_enabled = False
         try:
-            ToolService.adb_disconnect()
+            # 只断开**本设备**的 adb 连接：并行处理多台设备时，
+            # 全局 `adb disconnect` 会误伤其它正在查询的设备
+            ADBService.disconnect_device(ip)
         except Exception as e:
-            logger.warning("[串行管理器] 断开ADB连接时出错: %s", e)
+            logger.warning("[串行管理器] 断开设备 %s 的ADB连接时出错: %s", ip, e)
         self.msleep(300)
         
         try:
@@ -217,7 +219,8 @@ class SerialQueryManager(QThread):
         
         finally:
             try:
-                ToolService.adb_disconnect()
+                # 同上：并行场景下只断开本设备，避免误伤其它设备
+                ADBService.disconnect_device(ip)
             except Exception as e:
                 logger.warning("[串行管理器] 设备 %s 操作完成后断开ADB连接时出错: %s", device_id, e)
 

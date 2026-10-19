@@ -12,7 +12,8 @@
 ``UNSAFE_MESSAGE`` 拒绝。加密前在同一连接内先经 0x2201/0x2202 交换盐值协商
 AES-128 密钥，再用 0x2105 发加密请求、0x2106 收加密回复。
 
-收发串行锁：并发向同一设备发协议是已知的不稳定来源，故同一时刻只允许一次收发。
+收发串行锁：并发向**同一设备**发协议是已知的不稳定来源，故同一设备同一时刻只允许
+一次收发；锁按设备 IP 维度（`host_lock`），**不同设备之间可并行**。
 """
 
 import json
@@ -47,8 +48,22 @@ DEFAULT_EARLY_EXIT_S = 0.05
 # 单次 recv 上限
 _RECV_CHUNK = 8192
 
-# 协议收发串行锁
-REQUEST_LOCK = threading.RLock()
+# 协议收发串行锁（**按设备 IP 维度**）：
+# 动机：并发往同一设备发协议是已知的不稳定来源，必须串行；但不同设备之间互不影响。
+# 早先的全局锁会把所有设备串成一队，在多台设备查询时白白损失并行度。
+# 按 host 取锁后：同设备严格串行，跨设备可并行。
+_HOST_LOCKS: Dict[str, threading.RLock] = {}
+_HOST_LOCKS_GUARD = threading.Lock()
+
+
+def host_lock(host: str) -> threading.RLock:
+    """取该 host 的协议收发锁（惰性创建，线程安全）。"""
+    with _HOST_LOCKS_GUARD:
+        lock = _HOST_LOCKS.get(host)
+        if lock is None:
+            lock = threading.RLock()
+            _HOST_LOCKS[host] = lock
+        return lock
 
 
 def _recv_exact(sock: socket.socket, size: int) -> bytes:
@@ -225,7 +240,7 @@ def send_request(host: str, data: bytes, port: int = PROTOCOL_PORT,
     Returns:
         收到的原始字节流（加密通道为解密后重新封装的明文 0x2104 帧；可能为空）
     """
-    with REQUEST_LOCK:
+    with host_lock(host):
         try:
             with socket.create_connection((host, port), timeout=connect_timeout) as sock:
                 sock.settimeout(greet_timeout)

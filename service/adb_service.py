@@ -224,6 +224,16 @@ class ADBService:
         return run_command(cmd)
 
     @staticmethod
+    def disconnect_device(ip):
+        """断开**指定设备**的 adb 连接（不影响其它设备）。
+
+        并行查询场景必须用本方法：``adb disconnect``（无参数）会断开**所有**连接，
+        在多线程并行处理多台设备时会误伤别的设备。
+        """
+        cmd = f"{ADB_PATH} disconnect {ip}:5555"
+        return run_command(cmd)
+
+    @staticmethod
     def rm_file(ip, remote_file):
         """使用adb删除设备上的文件（自动确保 ADB 连接）"""
         ADBService.connect(ip)

@@ -288,3 +288,49 @@ def test_protocol_query_service_negative_cache_and_invalidate(monkeypatch):
     service.invalidate("10.0.0.9")
     assert service.get_status("10.0.0.9") is None
     assert len(calls) == 2
+
+
+# ---------------------------------------------------------------- P5 并发收敛
+
+def test_host_lock_is_per_host():
+    """协议锁按设备维度：同 host 同一把锁，不同 host 不同锁（跨设备可并行）。"""
+    from service.protocol.client import host_lock
+
+    assert host_lock("10.0.0.1") is host_lock("10.0.0.1")
+    assert host_lock("10.0.0.1") is not host_lock("10.0.0.2")
+
+
+def test_protocol_query_service_dedups_concurrent_same_host(monkeypatch):
+    """同一设备的并发取数只发生一次真实往返（其余线程复用结果）。"""
+    calls = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fake_query(host, keys, **kwargs):
+        calls.append(host)
+        entered.set()
+        release.wait(timeout=3.0)
+        return {"module": "Get", "reply": {"result": "kSuccess", "data": {
+            "Time": {"dateTime": "2026-10-19 18:30:05"},
+            "DeviceInfo": {"uptime": 60}}}}
+
+    monkeypatch.setattr(qs, "query_keys", fake_query)
+    service = ProtocolQueryService()
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(service.get_status("192.168.1.7")))
+        for _ in range(3)
+    ]
+
+    threads[0].start()
+    assert entered.wait(timeout=3.0)      # 首个线程已进入真实取数
+    for thread in threads[1:]:
+        thread.start()
+    release.set()
+    for thread in threads:
+        thread.join(timeout=5.0)
+
+    assert calls == ["192.168.1.7"]        # 只一次往返
+    assert len(results) == 3
+    assert all(result == results[0] for result in results)
+    assert results[0] == {"date_time": "2026-10-19 18:30:05", "uptime_seconds": 60}

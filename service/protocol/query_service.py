@@ -123,6 +123,10 @@ def build_device_time_info(device_datetime: datetime,
     return formatted, remote_epoch - local_epoch
 
 
+_MISS = object()
+"""缓存未命中哨兵（缓存值本身可能是 None —— 负缓存）"""
+
+
 class ProtocolQueryService:
     """协议查询服务：带支持面缓存的状态获取。"""
 
@@ -138,6 +142,26 @@ class ProtocolQueryService:
         self._unsupported_ttl = unsupported_ttl
         self._cache: Dict[str, Tuple[float, Optional[dict]]] = {}
         self._lock = threading.Lock()
+        # 按 host 的取数锁：同一设备的并发取数只允许一次真实往返
+        self._fetch_locks: Dict[str, threading.Lock] = {}
+        self._fetch_locks_guard = threading.Lock()
+
+    def _fetch_lock(self, host: str) -> threading.Lock:
+        with self._fetch_locks_guard:
+            lock = self._fetch_locks.get(host)
+            if lock is None:
+                lock = threading.Lock()
+                self._fetch_locks[host] = lock
+            return lock
+
+    def _read_cache(self, host: str):
+        """读缓存；未命中或已过期返回 :data:`_MISS`。"""
+        now = time.monotonic()
+        with self._lock:
+            entry = self._cache.get(host)
+        if entry is not None and entry[0] > now:
+            return entry[1]
+        return _MISS
 
     def get_status(self, host: str) -> Optional[dict]:
         """获取设备运行状态（``{"date_time": str|None, "uptime_seconds": int|None}``）。
@@ -147,17 +171,21 @@ class ProtocolQueryService:
         """
         if not host:
             return None
-        now = time.monotonic()
-        with self._lock:
-            entry = self._cache.get(host)
-        if entry is not None and entry[0] > now:
-            return entry[1]
+        cached = self._read_cache(host)
+        if cached is not _MISS:
+            return cached
 
-        data = self._query(host)
-        ttl = self._status_ttl if data is not None else self._unsupported_ttl
-        with self._lock:
-            self._cache[host] = (now + ttl, data)
-        return data
+        # 同一设备的并发取数串行化：其余线程等锁后直接复用结果，避免重复往返
+        with self._fetch_lock(host):
+            cached = self._read_cache(host)
+            if cached is not _MISS:
+                return cached
+            now = time.monotonic()
+            data = self._query(host)
+            ttl = self._status_ttl if data is not None else self._unsupported_ttl
+            with self._lock:
+                self._cache[host] = (now + ttl, data)
+            return data
 
     def _query(self, host: str) -> Optional[dict]:
         parsed = query_keys(host, GET_KEYS, port=self._port,
