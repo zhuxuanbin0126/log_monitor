@@ -1,18 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""设备截图服务 - 负责通过 ADB 捕获设备屏幕截图"""
+"""设备截图服务 - 负责捕获设备屏幕截图
+
+Android 设备**协议优先**：``ReadBack{target:"ScreenShot", fileTransferMode:2}``
+经 Socket 文件通道回传整屏图片（免 adb、免 root）；协议不可用时回落原有
+adb ``screencap`` 流程。落盘路径与命名规则保持不变。
+"""
 
 import os
 import time
 from datetime import datetime
 
+from config import USE_PROTOCOL_QUERY
 from data_models import OperationResult
+from service.logging_service import get_logger
 from service.tool_service import ToolService
+
+logger = get_logger(__name__)
 
 
 class ScreenshotService:
     """设备截图业务服务类"""
+
+    @staticmethod
+    def _try_protocol_screenshot(ip, target_file) -> bool:
+        """协议截图并落盘；成功返回 True（失败返回 False，由调用方回落 adb）。"""
+        try:
+            from service.protocol import query_screenshot
+            image = query_screenshot(ip)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("设备 %s 协议截图异常，回落 adb: %s", ip, exc)
+            return False
+        if not image:
+            return False
+        with open(target_file, 'wb') as file_handle:
+            file_handle.write(image)
+        logger.info("设备 %s 协议截图成功: %s 字节 -> %s", ip, len(image), target_file)
+        return True
 
     @staticmethod
     def capture_screenshot(device_id, ip, password, system_type, screenshot_path="./screenshot") -> OperationResult:
@@ -36,6 +61,11 @@ class ScreenshotService:
             timestamp = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
             screenshot_file = f"{device_dir}/{device_id}_{timestamp}.jpg"
             remote_file = "/sdcard/screenshot.png"
+
+            # 协议优先：ReadBack ScreenShot（Socket 文件通道，整屏图片直出、免 adb）
+            if USE_PROTOCOL_QUERY and ScreenshotService._try_protocol_screenshot(ip, screenshot_file):
+                return OperationResult(True, data=screenshot_file.replace('\\', '/'))
+            logger.info("设备 %s 协议截图不可用，回落 adb screencap", device_id)
 
             stdout, stderr, returncode = ToolService.adb_connect(ip)
             if returncode != 0:
