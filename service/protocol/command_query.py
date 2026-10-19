@@ -24,7 +24,7 @@
 
 import json
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from config import (
     PROTOCOL_CONNECT_TIMEOUT, PROTOCOL_EXEC_START, PROTOCOL_PORT,
@@ -162,6 +162,33 @@ def exec_if_supported(host: str, command: str, **kwargs) -> Optional[ExecResult]
     if not is_protocol_supported(host):
         return None
     return exec_command(host, command, **kwargs)
+
+
+def exec_command_triple(host: str, command: str, *, working_dir: Optional[str] = None,
+                        start: str = PROTOCOL_EXEC_START, async_run: bool = False,
+                        port: int = PROTOCOL_PORT,
+                        connect_timeout: float = PROTOCOL_CONNECT_TIMEOUT,
+                        recv_timeout: float = PROTOCOL_RECV_TIMEOUT) -> Optional[Tuple[str, str, int]]:
+    """执行命令并返回 ``(stdout, stderr, returncode)``；协议通道不可用返回 None。
+
+    供既有的「三返回值」调用点（``ToolService`` 的命令通道、``service.transports``）
+    直接复用，使 Android 的 shell 命令走**加密 Command.exec**，无需拉起 adb/SSH。
+
+    Returns:
+        ``(stdout, stderr, returncode)``；``None`` 表示**通道不可用**
+        （不可达/不支持加密通道），调用方应回落 adb/SSH。
+        注意：命令本身返回非 0 退出码时**不是** None，而是带着真实退出码的三元组，
+        调用方不应再改走别的通道重跑（避免副作用命令被重复执行）。
+    """
+    script = f'cd {working_dir} && {command}' if working_dir else command
+    result = exec_command(host, script, start=start, async_run=async_run, port=port,
+                          connect_timeout=connect_timeout, recv_timeout=recv_timeout)
+    if result is None:
+        return None
+    if result.exit_code == 0:
+        return result.text(), "", 0
+    error = (result.error or "").strip() or f"exec 退出码 {result.exit_code}"
+    return result.text(), error, result.exit_code
 
 
 def line_count_from_output(result: Optional[ExecResult]) -> Optional[int]:

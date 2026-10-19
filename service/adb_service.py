@@ -11,6 +11,8 @@ from .device_utils import (
     DEVICE_OTG_CONFIG, is_android_device,
 )
 from .logging_service import get_logger
+from .protocol.command_query import exec_command_triple
+from .protocol.set_query import ADB_MODE_BOTH, ADB_TIMER_ON, set_development
 
 logger = get_logger(__name__)
 
@@ -46,12 +48,8 @@ class ADBService:
             )
             if stderr and ("unable" in stderr.lower() or "cannot" in stderr.lower() or "refused" in stderr.lower()):
                 try:
-                    logger.warning("[push] 连接失败，尝试通过SSH重启ADB服务")
-                    plink_exe = get_tool_path('plink.exe')
-                    run_command(f"echo y | {plink_exe} -l root -pw \"{password}\" \"{ip}\" \"setprop service.adb.tcp.port 5555\"", timeout=5)
-                    run_command(f"echo y | {plink_exe} -l root -pw \"{password}\" \"{ip}\" \"stop adbd\"", timeout=5)
-                    run_command(f"echo y | {plink_exe} -l root -pw \"{password}\" \"{ip}\" \"start adbd\"", timeout=5)
-                    time.sleep(3)
+                    logger.warning("[push] 连接失败，尝试重启设备 ADB 服务（协议优先）")
+                    ADBService._restart_adbd(ip, password)
                     stdout, stderr, returncode = ADBService.prepare_connection(
                         ip, need_remount=need_remount, device_id=device_id, password=password
                     )
@@ -158,39 +156,57 @@ class ADBService:
             return "", str(e), -1
 
     @staticmethod
+    def _restart_adbd(ip, password):
+        """重启/开启设备网络 ADB：**协议 Set Development 优先**，plink 兜底。
+
+        Returns:
+            bool: 是否由**协议**成功下发（False 表示走了 plink 兜底）。
+        """
+        try:
+            ok, msg = set_development(ip, ADB_MODE_BOTH, ADB_TIMER_ON)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("协议 Set Development 异常，回落 plink: %s", exc)
+            ok, msg = False, str(exc)
+        if ok:
+            logger.info("已通过协议开启 usb+tcp ADB: %s", msg)
+            time.sleep(2)
+            return True
+
+        logger.info("协议不可用（%s），回落 plink 重启 adbd", msg)
+        plink_exe = get_tool_path('plink.exe')
+        run_command(
+            f'echo y | "{plink_exe}" -batch -l root -pw "{password}" "{ip}" '
+            f'"setprop service.adb.tcp.port 5555"', timeout=5)
+        run_command(
+            f'echo y | "{plink_exe}" -batch -l root -pw "{password}" "{ip}" '
+            f'"stop adbd"', timeout=5)
+        time.sleep(1)
+        run_command(
+            f'echo y | "{plink_exe}" -batch -l root -pw "{password}" "{ip}" '
+            f'"start adbd"', timeout=5)
+        time.sleep(3)
+        return False
+
+    @staticmethod
     def _fallback_enable_adb(ip, password, device_id):
-        """ADB 连接失败时的 fallback：通过 SSH 开启 OTG 模式和重启 ADB"""
+        """ADB 连接失败时的 fallback：切换 OTG 模式 + 重启设备 ADB（协议优先）。"""
         from .device_utils import DEVICE_OTG_CONFIG as otg_cfg
         dev_type_prefix = device_id.split('-')[0]
         otg_config = otg_cfg.get(dev_type_prefix)
 
         if otg_config:
-            plink_exe = get_tool_path('plink.exe')
-            # 执行 OTG 命令切换到 peripheral 模式
+            # 切换 OTG 到 peripheral 模式：协议 exec 优先，plink 兜底
             otg_value = otg_config["value"]
             otg_path = otg_config["path"]
-            otg_cmd = (
-                f'echo y | "{plink_exe}" -batch -l root -pw "{password}" '
-                f'"{ip}" "echo {otg_value} > {otg_path}"'
-            )
-            run_command(otg_cmd, timeout=10)
+            triple = exec_command_triple(ip, f'echo {otg_value} > {otg_path}')
+            if triple is None:
+                plink_exe = get_tool_path('plink.exe')
+                run_command(
+                    f'echo y | "{plink_exe}" -batch -l root -pw "{password}" '
+                    f'"{ip}" "echo {otg_value} > {otg_path}"', timeout=10)
             time.sleep(2)
 
-        plink_exe = get_tool_path('plink.exe')
-        run_command(
-            f'echo y | "{plink_exe}" -batch -l root -pw "{password}" '
-            f'"{ip}" "setprop service.adb.tcp.port 5555"', timeout=5
-        )
-        run_command(
-            f'echo y | "{plink_exe}" -batch -l root -pw "{password}" '
-            f'"{ip}" "stop adbd"', timeout=5
-        )
-        time.sleep(1)
-        run_command(
-            f'echo y | "{plink_exe}" -batch -l root -pw "{password}" '
-            f'"{ip}" "start adbd"', timeout=5
-        )
-        time.sleep(3)
+        ADBService._restart_adbd(ip, password)
 
     @staticmethod
     def connect(ip):
@@ -333,11 +349,7 @@ class ADBService:
 
                 if stderr and ("unable" in stderr.lower() or "cannot" in stderr.lower() or "refused" in stderr.lower()):
                     try:
-                        plink_exe = get_tool_path('plink.exe')
-                        run_command(f"echo y | {plink_exe} -l root -pw \"{password}\" \"{ip}\" \"setprop service.adb.tcp.port 5555\"", timeout=5)
-                        run_command(f"echo y | {plink_exe} -l root -pw \"{password}\" \"{ip}\" \"stop adbd\"", timeout=5)
-                        run_command(f"echo y | {plink_exe} -l root -pw \"{password}\" \"{ip}\" \"start adbd\"", timeout=5)
-                        time.sleep(3)
+                        ADBService._restart_adbd(ip, password)
                         stdout, stderr, returncode = ADBService.prepare_connection(
                             ip, need_remount=need_remount, device_id=device_id, password=password
                         )
@@ -504,14 +516,10 @@ class ADBService:
 
     @staticmethod
     def restart_service(ip, password, device_id=None):
-        """通过SSH重启设备的ADB服务"""
+        """重启设备的 ADB 服务（协议 Set Development 优先，plink 兜底）"""
         try:
-            plink_exe = get_tool_path('plink.exe')
-            run_command(f'echo y | "{plink_exe}" -batch -l root -pw "{password}" "{ip}" "setprop service.adb.tcp.port 5555"', timeout=5)
-            run_command(f'echo y | "{plink_exe}" -batch -l root -pw "{password}" "{ip}" "stop adbd"', timeout=5)
-            time.sleep(1)
-            run_command(f'echo y | "{plink_exe}" -batch -l root -pw "{password}" "{ip}" "start adbd"', timeout=5)
-            time.sleep(3)
-            return True, "ADB服务重启成功"
+            by_protocol = ADBService._restart_adbd(ip, password)
+            return True, ("已通过协议开启 usb+tcp ADB" if by_protocol
+                          else "已通过 plink 重启 adbd")
         except Exception as e:
             return False, f"重启ADB服务异常: {str(e)}"

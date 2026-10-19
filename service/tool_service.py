@@ -25,6 +25,9 @@ from .adb_service import ADBService
 from .adb_device_manager import ADBDeviceManager
 from .logging_service import get_logger
 from .password_service import get_password as compute_password
+from .protocol.command_query import (
+    exec_command_triple, exec_if_supported,
+)
 from .protocol.device_info_query import query_device_info
 
 logger = get_logger(__name__)
@@ -645,8 +648,8 @@ class ToolService:
     def execute_query_command(device_id, ip, password, cmd, working_dir=None, max_retries=3):
         """
         执行查询类命令
-        - 对于已成功开启网络 ADB 的 Android 设备，强制使用 adb -s [serial] shell 执行。
-        - 其他 Android 设备或 ADB 未开启时，使用 SSH(plink) 方式避免 ADB 连接冲突。
+        - Android 设备**优先走协议加密 Command.exec**（不依赖 SSH/adb，最快最稳）。
+        - 协议不可用时：已开启网络 ADB 的走 adb -s [serial] shell，其余走 SSH(plink) 兜底。
         
         参数:
             device_id: 设备ID
@@ -662,7 +665,12 @@ class ToolService:
         for attempt in range(max_retries):
             try:
                 if ToolService.is_android_device(device_id):
-                    # 优先：Android 且 ADB 已开启 → 使用 adb -s [serial]
+                    # 1) 协议加密 exec（首选）
+                    protocol_triple = exec_command_triple(ip, cmd, working_dir=working_dir)
+                    if protocol_triple is not None:
+                        return protocol_triple
+
+                    # 2) Android 且 ADB 已开启 → 使用 adb -s [serial]
                     if ADBDeviceManager.should_use_adb(device_id):
                         success, serial = ADBDeviceManager.ensure_adb_connected(ip, password, device_id)
                         if success and serial:

@@ -1,10 +1,14 @@
-"""设备命令传输层抽象：ADB / SSH 可替换实现。"""
+"""设备命令传输层抽象：协议 exec / ADB / SSH 可替换实现。"""
 
 import os
 from abc import ABC, abstractmethod
 
 from service.adb_device_manager import ADBDeviceManager
 from service.device_utils import get_tool_path, is_android_device, run_command
+from service.logging_service import get_logger
+from service.protocol.command_query import exec_command_triple
+
+logger = get_logger(__name__)
 
 
 class IDeviceTransport(ABC):
@@ -63,7 +67,12 @@ class SshTransport(IDeviceTransport):
 
 
 class AndroidTransport(IDeviceTransport):
-    """Android 传输：ADB 可用时走 adb，否则回退 SSH。"""
+    """Android 传输：**协议加密 exec 优先** → adb → SSH。
+
+    Android 设备不再以 SSH 为首选通道：能通协议时一律走加密 ``Command.exec``
+    （既不依赖 SSH，也不依赖先把网络 ADB 连起来，最快且最稳）。
+    命令本身返回非 0 退出码时不做通道重试（避免副作用命令被重复执行）。
+    """
 
     def __init__(self, device_id: str):
         self._device_id = device_id
@@ -71,12 +80,21 @@ class AndroidTransport(IDeviceTransport):
 
     def execute(self, ip: str, password: str, command_script: str,
                 base_dir: str = ".") -> tuple:
+        # 1) 协议加密 exec（首选）
+        triple = exec_command_triple(ip, command_script)
+        if triple is not None:
+            return triple
+        logger.debug("设备 %s 协议 exec 不可用，回落 adb/SSH", self._device_id)
+
+        # 2) 设备已开启网络 ADB → adb
         if ADBDeviceManager.should_use_adb(self._device_id):
             success, serial = ADBDeviceManager.ensure_adb_connected(
                 ip, password, self._device_id
             )
             if success and serial:
                 return ADBDeviceManager.execute_adb_command(ip, serial, command_script)
+
+        # 3) SSH 兜底
         return self._ssh.execute(ip, password, command_script, base_dir)
 
 
