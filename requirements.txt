@@ -1,4 +1,7 @@
 PyQt5==5.15.9
 pandas==2.1.0
+# pandas 2.1.0 的二进制针对 numpy 1.x ABI 编译，与 numpy 2.x 不兼容
+# （报 numpy.dtype size changed），故此处必须钉在 1.x
+numpy>=1.23,<2
 openpyxl==3.1.2
 paramiko==3.5.1
