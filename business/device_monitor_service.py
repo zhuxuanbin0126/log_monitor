@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timedelta
 import time
 import os
+import threading
 from service.tool_service import ToolService
 from service.data_processing_service import DataProcessingService
 from service.file_service import FileService
@@ -36,6 +37,9 @@ class DeviceMonitorService:
         os.makedirs(self.base_dir, exist_ok=True)
         self.device_data = FileService.load_device_data()
         self.notepad_process = None  # 用于跟踪记事本进程
+        # 并行监控下保护「设备基准数据 + 日志落盘」的可重入锁：
+        # 耗时的网络取数在锁外并行，仅短小的状态读写/落盘进锁，兼顾并发与一致性
+        self._state_lock = threading.RLock()
     
     def count_init_setting(self, ip, password, device_id, system_type, custom_file_paths=None):
         """
@@ -463,11 +467,12 @@ class DeviceMonitorService:
     # ---- 日志写入辅助方法 ----
 
     def _write_log_to_file(self, suffix, content):
-        """统一的日志文件写入方法"""
-        os.makedirs(LOG_DIR, exist_ok=True)
-        log_path = f'{LOG_DIR}/{os.path.basename(self.base_dir)}_{suffix}.log'
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(content)
+        """统一的日志文件写入方法（并行监控下加锁，避免多设备日志行交错）"""
+        with self._state_lock:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            log_path = f'{LOG_DIR}/{os.path.basename(self.base_dir)}_{suffix}.log'
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(content)
 
     def _write_uptime_log(self, device_id, ip, uptime_info):
         entry = f"{device_id},{ip},{uptime_info.get('current_time', 'N/A')},{uptime_info.get('formatted_uptime', 'N/A')}\n"
@@ -486,57 +491,59 @@ class DeviceMonitorService:
     # ---- 检查方法 ----
 
     def _check_boot_deviation(self, device_id, uptime_info, errors):
-        """检查启动时间偏差"""
+        """检查启动时间偏差（基准数据读写在锁内，避免并行监控互相覆盖）"""
         if 'boot_time' not in uptime_info:
             return
         boot_time = datetime.fromisoformat(uptime_info['boot_time'])
-        if device_id not in self.device_data:
-            self.device_data[device_id] = {}
-        data = self.device_data[device_id]
-        if 'initial_boot_time' not in data:
-            data['initial_os_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            data['initial_boot_time'] = boot_time.strftime('%Y-%m-%d %H:%M')
-            data['last_boot_time'] = boot_time.strftime('%Y-%m-%d %H:%M')
-            return
-        initial_boot_time = datetime.fromisoformat(data['last_boot_time'])
-        time_diff_from_initial = abs((boot_time - initial_boot_time).total_seconds())
-        if time_diff_from_initial > time_diff_threshold:
-            errors.append({
-                'type': '启动时间误差',
-                'process': f'初始启动时间: {initial_boot_time.isoformat()}, 当前启动时间: {boot_time.isoformat()}',
-                'difference': f'{time_diff_from_initial}秒',
-            })
-            data['last_boot_change_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            data['last_boot_time'] = boot_time.strftime('%Y-%m-%d %H:%M')
+        with self._state_lock:
+            if device_id not in self.device_data:
+                self.device_data[device_id] = {}
+            data = self.device_data[device_id]
+            if 'initial_boot_time' not in data:
+                data['initial_os_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                data['initial_boot_time'] = boot_time.strftime('%Y-%m-%d %H:%M')
+                data['last_boot_time'] = boot_time.strftime('%Y-%m-%d %H:%M')
+                return
+            initial_boot_time = datetime.fromisoformat(data['last_boot_time'])
+            time_diff_from_initial = abs((boot_time - initial_boot_time).total_seconds())
+            if time_diff_from_initial > time_diff_threshold:
+                errors.append({
+                    'type': '启动时间误差',
+                    'process': f'初始启动时间: {initial_boot_time.isoformat()}, 当前启动时间: {boot_time.isoformat()}',
+                    'difference': f'{time_diff_from_initial}秒',
+                })
+                data['last_boot_change_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                data['last_boot_time'] = boot_time.strftime('%Y-%m-%d %H:%M')
 
     def _check_time_deviation(self, device_id, uptime_info, time_diff, errors):
-        """检查设备时间偏差"""
+        """检查设备时间偏差（基准数据读写在锁内，避免并行监控互相覆盖）"""
         if time_diff == "N/A":
             return
         try:
             time_diff_value = int(time_diff)
         except (ValueError, TypeError):
             return
-        if device_id not in self.device_data:
-            self.device_data[device_id] = {}
-        data = self.device_data[device_id]
-        if 'initial_time_diff' not in data:
-            data['initial_time_diff'] = time_diff_value
+        with self._state_lock:
+            if device_id not in self.device_data:
+                self.device_data[device_id] = {}
+            data = self.device_data[device_id]
+            if 'initial_time_diff' not in data:
+                data['initial_time_diff'] = time_diff_value
+                data['last_time_diff'] = time_diff_value
+                data['initial_timestamp'] = datetime.now().timestamp()
+                return
+
+            days_passed = self._compute_days_passed(data, uptime_info)
+            daily_deviation = abs(time_diff_value - data['last_time_diff']) / days_passed
             data['last_time_diff'] = time_diff_value
-            data['initial_timestamp'] = datetime.now().timestamp()
-            return
 
-        days_passed = self._compute_days_passed(data, uptime_info)
-        daily_deviation = abs(time_diff_value - data['last_time_diff']) / days_passed
-        data['last_time_diff'] = time_diff_value
-
-        if daily_deviation > daily_time_diff_threshold:
-            errors.append({
-                'type': '时间偏差异常',
-                'process': f'初始时间差: {data["initial_time_diff"]}s, 当前时间差: {time_diff_value}s, 天数: {days_passed}天',
-                'difference': f'日均偏差: {daily_deviation:.2f}s > {daily_time_diff_threshold}s',
-            })
-            data['last_card_time_change_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if daily_deviation > daily_time_diff_threshold:
+                errors.append({
+                    'type': '时间偏差异常',
+                    'process': f'初始时间差: {data["initial_time_diff"]}s, 当前时间差: {time_diff_value}s, 天数: {days_passed}天',
+                    'difference': f'日均偏差: {daily_deviation:.2f}s > {daily_time_diff_threshold}s',
+                })
+                data['last_card_time_change_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     def _compute_days_passed(self, data, uptime_info):
         """计算从初始时间到现在的天数"""
@@ -551,26 +558,27 @@ class DeviceMonitorService:
         return 1
 
     def _check_start_count_deviation(self, device_id, start_count, errors):
-        """检查启动次数偏差"""
+        """检查启动次数偏差（基准数据读写在锁内，避免并行监控互相覆盖）"""
         try:
             current = int(start_count)
         except (ValueError, TypeError):
             return
-        if device_id not in self.device_data:
-            self.device_data[device_id] = {}
-        data = self.device_data[device_id]
-        if 'initial_start_count' not in data:
-            data['initial_start_count'] = current
-            data['last_start_count'] = current
-            return
-        if current != data['last_start_count']:
-            errors.append({
-                'type': '启动次数异常',
-                'process': f'初始启动次数: {data["initial_start_count"]}, 当前启动次数: {current}',
-                'difference': '启动次数异常',
-            })
-            data['last_start_count'] = current
-            data['last_start_count_change_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with self._state_lock:
+            if device_id not in self.device_data:
+                self.device_data[device_id] = {}
+            data = self.device_data[device_id]
+            if 'initial_start_count' not in data:
+                data['initial_start_count'] = current
+                data['last_start_count'] = current
+                return
+            if current != data['last_start_count']:
+                errors.append({
+                    'type': '启动次数异常',
+                    'process': f'初始启动次数: {data["initial_start_count"]}, 当前启动次数: {current}',
+                    'difference': '启动次数异常',
+                })
+                data['last_start_count'] = current
+                data['last_start_count_change_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     def _check_data_completeness(self, device_id, ip, formatted_uptime,
                                   formatted_remote_time, start_count,
@@ -600,13 +608,14 @@ class DeviceMonitorService:
                     })
 
     def _update_device_data(self, device_id, formatted_uptime):
-        """更新设备数据最后采样值"""
-        if device_id not in self.device_data:
-            self.device_data[device_id] = {}
-        self.device_data[device_id]['last_uptime'] = formatted_uptime
-        dev_type_prefix = device_id.split('-')[0]
-        if dev_type_prefix in ["C08L", "C16L", "D16"]:
-            self.device_data[device_id]['last_start_count'] = '无法获取'
+        """更新设备数据最后采样值（锁内，避免并行监控互相覆盖）"""
+        with self._state_lock:
+            if device_id not in self.device_data:
+                self.device_data[device_id] = {}
+            self.device_data[device_id]['last_uptime'] = formatted_uptime
+            dev_type_prefix = device_id.split('-')[0]
+            if dev_type_prefix in ["C08L", "C16L", "D16"]:
+                self.device_data[device_id]['last_start_count'] = '无法获取'
     
     def capture_screenshot(self, device_id, ip, password, system_type, screenshot_path="./screenshot"):
         """捕获设备屏幕截图"""

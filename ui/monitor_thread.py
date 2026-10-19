@@ -1,8 +1,15 @@
 from PyQt5.QtCore import QThread, pyqtSignal
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from business.device_monitor_service import DeviceMonitorService
 from service.tool_service import ToolService
+from service.device_utils import is_android_device
+from service.protocol import get_device_status
+from config import QUERY_MAX_WORKERS
+from service.logging_service import get_logger
 from data_models import MonitorConfig
 import copy
+
+logger = get_logger(__name__)
 
 
 class MonitorThread(QThread):
@@ -63,14 +70,35 @@ class MonitorThread(QThread):
             self.status_signal.emit("监控已停止")
 
     def _process_monitor_cycle(self):
-        """处理一轮设备监控"""
-        devices = self.selected_devices
-        for idx, device_info in enumerate(devices):
-            if not self.running:
-                break
-            self._process_one_device(device_info, idx, len(devices))
+        """处理一轮设备监控。
 
-    def _process_one_device(self, device_info, idx, total):
+        几十台设备时按设备**并行**（协议取数 + 截图都是网络等待为主，并行收益明显）；
+        每台设备的状态基准读写由 ``DeviceMonitorService`` 内部锁串行保护。
+        """
+        devices = list(self.selected_devices)
+        if not devices:
+            return
+        workers = min(len(devices), QUERY_MAX_WORKERS)
+        if workers <= 1:
+            for device_info in devices:
+                if not self.running:
+                    break
+                self._process_one_device(device_info)
+            return
+
+        logger.info("[监控] 本轮并行处理 %s 台设备（并发 %s）", len(devices), workers)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(self._process_one_device, device_info)
+                       for device_info in devices]
+            for future in as_completed(futures):
+                if not self.running:
+                    break
+                try:
+                    future.result(timeout=300)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("[监控] 单设备任务异常: %s", exc)
+
+    def _process_one_device(self, device_info):
         """处理单个设备的监控检查"""
         # 解析设备信息
         device_id, ip = self._parse_device_info(device_info)
@@ -79,7 +107,9 @@ class MonitorThread(QThread):
 
         try:
             password = ToolService.get_password(device_id)
-            ToolService.initialize_connection(ip, password)
+            # 协议可用时完全不需要 SSH 前置（协议优先取数 + 协议截图）
+            if not self._protocol_ready(device_id, ip):
+                ToolService.initialize_connection(ip, password)
 
             # 判断是否首次获取
             is_first_time = self._is_first_time(device_id)
@@ -108,9 +138,15 @@ class MonitorThread(QThread):
         except Exception as e:
             self.error_signal.emit(f"处理设备 {device_id} ({ip}) 时出错: {str(e)}", device_id, ip)
 
-        # 设备间延迟
-        if self.running and idx < total - 1:
-            self.msleep(100)
+    @staticmethod
+    def _protocol_ready(device_id, ip):
+        """该设备当前是否可用协议通道（可用则无需 SSH 初始化）。"""
+        if not is_android_device(device_id):
+            return False
+        try:
+            return get_device_status(ip) is not None
+        except Exception:  # pylint: disable=broad-except
+            return False
 
     def _parse_device_info(self, device_info):
         """解析设备信息为 (device_id, ip)"""
