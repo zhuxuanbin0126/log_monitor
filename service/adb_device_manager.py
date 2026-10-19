@@ -16,6 +16,8 @@ from service.device_utils import (
     ADB_PATH, run_command, get_tool_path, is_android_device,
 )
 from service.logging_service import get_logger
+from service.protocol.set_query import enable_wireless_adb as protocol_enable_wireless_adb
+from config import USE_PROTOCOL_QUERY
 
 logger = get_logger(__name__)
 
@@ -82,56 +84,98 @@ class ADBDeviceManager:
     @classmethod
     def enable_internet_adb(cls, ip, password, device_id):
         """
-        对 Android 设备开启网络 ADB 功能：
-        1. setprop persist.internet_adb_enable 1
-        2. setprop service.adb.tcp.port 5555
-        3. 重启 adbd 服务
-        4. 使用 adb connect 实际验证连通性（而非仅 getprop）
+        对 Android 设备开启网络 ADB：
+        1. 优先走 MagicPlayer 协议 Set Development（adbMode=tcp, adbTimer=0）
+        2. 协议未启用/未生效时回落 plink：setprop 开网络 ADB + 重启 adbd
+        3. 统一用 adb connect 实际验证连通性（而非仅 getprop）
 
         返回: (success: bool, message: str)
         """
-        plink_exe = get_tool_path('plink.exe')
-        base_cmd = f'echo y | "{plink_exe}" -batch -l root -pw "{password}" "{ip}"'
-
         try:
-            # 1. 设置持久化属性开启网络 ADB
-            run_command(f'{base_cmd} "setprop persist.internet_adb_enable 1"', timeout=5)
-            time.sleep(0.3)
+            protocol_ok, protocol_msg = cls._try_protocol_enable_wireless_adb(ip, device_id)
+            if not protocol_ok:
+                _log("INFO", f"{device_id} 协议通道不可用（{protocol_msg}），走 plink 兜底")
+                cls._enable_internet_adb_via_plink(ip, password)
 
-            # 2. 设置 ADB TCP 端口
-            run_command(f'{base_cmd} "setprop service.adb.tcp.port 5555"', timeout=5)
-            time.sleep(0.3)
-
-            # 3. 重启 adbd 服务
-            run_command(f'{base_cmd} "stop adbd"', timeout=5)
-            time.sleep(0.5)
-            run_command(f'{base_cmd} "start adbd"', timeout=5)
-            time.sleep(2)
-
-            # 4. 实际验证：尝试 adb connect，最多等待 10 秒
             _log("INFO", f"正在验证 {device_id} ADB 连通性...")
-            for verify_attempt in range(5):
-                ADBService.disconnect()
-                time.sleep(0.2)
-                stdout, stderr, rc = ADBService.connect(ip)
-                _log("INFO", f"验证尝试 {verify_attempt + 1} connect {ip}: rc={rc} stdout={stdout!r} stderr={stderr!r}")
-                if rc == 0 and "connected" in stdout.lower():
-                    serial = ADBService.get_device_serial(ip)
-                    if serial and not serial.startswith(f"{ip}:"):
-                        cls._put_pooled_connection(ip, serial)
-                        cls.set_cached_status(device_id, '开启')
-                        _log("INFO", f"{device_id} 网络 ADB 已开启，serial={serial}")
-                        return True, f"网络 ADB 已开启，serial={serial}"
-                time.sleep(1.5)
+            ok, serial, detail = cls._verify_adb_connect(ip, device_id)
+            if ok:
+                source = "协议" if protocol_ok else "plink"
+                _log("INFO", f"{device_id} 网络 ADB 已开启（{source}），serial={serial}")
+                return True, f"网络 ADB 已开启（{source}），serial={serial}"
 
-            # 5. getprop 仅作为辅助诊断
-            prop_enabled, prop_value = cls.check_internet_adb_enabled(ip, password, device_id, timeout=3)
+            # 协议下发成功但端口未通 → 再用 plink 重启 adbd 后重试一次
+            if protocol_ok:
+                _log("WARN", f"协议开启后 adb connect 未连通（{detail}），回落 plink 重试")
+                cls._enable_internet_adb_via_plink(ip, password)
+                ok, serial, detail = cls._verify_adb_connect(ip, device_id)
+                if ok:
+                    _log("INFO", f"{device_id} 网络 ADB 已开启（plink 兜底），serial={serial}")
+                    return True, f"网络 ADB 已开启（plink 兜底），serial={serial}"
+
+            # getprop 仅作为辅助诊断
+            _, prop_value = cls.check_internet_adb_enabled(ip, password, device_id, timeout=3)
             _log("ERROR", f"{device_id} adb connect 验证失败，persist.internet_adb_enable={prop_value}")
             return False, f"adb connect 验证失败，persist.internet_adb_enable={prop_value}"
 
         except Exception as e:
             _log("ERROR", f"开启网络 ADB 失败: {e}")
             return False, str(e)
+
+    @classmethod
+    def _enable_internet_adb_via_plink(cls, ip, password):
+        """plink 兜底：setprop 持久化开启网络 ADB + 重启 adbd 服务。"""
+        plink_exe = get_tool_path('plink.exe')
+        base_cmd = f'echo y | "{plink_exe}" -batch -l root -pw "{password}" "{ip}"'
+
+        # 1. 设置持久化属性开启网络 ADB
+        run_command(f'{base_cmd} "setprop persist.internet_adb_enable 1"', timeout=5)
+        time.sleep(0.3)
+
+        # 2. 设置 ADB TCP 端口
+        run_command(f'{base_cmd} "setprop service.adb.tcp.port 5555"', timeout=5)
+        time.sleep(0.3)
+
+        # 3. 重启 adbd 服务
+        run_command(f'{base_cmd} "stop adbd"', timeout=5)
+        time.sleep(0.5)
+        run_command(f'{base_cmd} "start adbd"', timeout=5)
+        time.sleep(2)
+
+    @classmethod
+    def _try_protocol_enable_wireless_adb(cls, ip, device_id):
+        """协议 Set Development 开启无线 ADB；返回 ``(是否成功, 说明)``。"""
+        if not USE_PROTOCOL_QUERY:
+            return False, "协议通道未启用"
+        try:
+            ok, msg = protocol_enable_wireless_adb(ip)
+        except Exception as e:
+            _log("WARN", f"{device_id} 协议开启无线 ADB 异常: {e}")
+            return False, f"协议异常: {e}"
+        if ok:
+            _log("INFO", f"{device_id} 已通过协议下发开启无线 ADB: {msg}")
+        else:
+            _log("WARN", f"{device_id} 协议开启无线 ADB 失败: {msg}")
+        return ok, msg
+
+    @classmethod
+    def _verify_adb_connect(cls, ip, device_id, attempts=5):
+        """adb connect 实际验证连通性；返回 ``(是否连通, serial, 末次诊断)``。"""
+        detail = ""
+        for _ in range(attempts):
+            ADBService.disconnect()
+            time.sleep(0.2)
+            stdout, stderr, rc = ADBService.connect(ip)
+            detail = f"rc={rc} stdout={stdout!r} stderr={stderr!r}"
+            _log("INFO", f"验证 connect {ip}: {detail}")
+            if rc == 0 and "connected" in stdout.lower():
+                serial = ADBService.get_device_serial(ip)
+                if serial and not serial.startswith(f"{ip}:"):
+                    cls._put_pooled_connection(ip, serial)
+                    cls.set_cached_status(device_id, '开启')
+                    return True, serial, detail
+            time.sleep(1.5)
+        return False, "", detail
 
     @classmethod
     def _get_pooled_connection(cls, ip):

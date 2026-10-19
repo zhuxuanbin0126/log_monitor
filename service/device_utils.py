@@ -13,6 +13,8 @@ import queue
 import hashlib
 import re
 
+from .adb_env import adb_subprocess_env, is_adb_command
+
 
 def get_project_root():
     """获取项目根目录，支持打包后的环境"""
@@ -68,9 +70,30 @@ def get_tool_path(tool_name):
     return path.replace('/', '\\')
 
 
-def run_command(cmd, encoding='utf-8', timeout=30):
-    """执行命令并返回输出，支持超时控制"""
+def _resolve_command_env(cmd, env):
+    """解析子进程环境：显式传入优先；否则 adb 命令自动套用归一化环境。
+
+    见 :mod:`service.adb_env`：Windows 下 ``%TEMP%`` 若为 8.3 短名，厂商版 adb
+    会因写 ``adb.log`` 失败而无法启动 daemon，故 adb 命令必须归一化 TEMP/TMP。
+    """
+    if env is not None:
+        return env
+    if is_adb_command(cmd):
+        return adb_subprocess_env()
+    return None
+
+
+def run_command(cmd, encoding='utf-8', timeout=30, env=None):
+    """执行命令并返回输出，支持超时控制。
+
+    Args:
+        cmd: 命令字符串（``shell=True`` 执行）
+        encoding: 输出解码
+        timeout: 超时秒数
+        env: 可选子进程环境；不传时 **adb 相关命令自动套用**归一化环境
+    """
     result_queue = queue.Queue()
+    child_env = _resolve_command_env(cmd, env)
 
     def _run_thread():
         try:
@@ -80,7 +103,8 @@ def run_command(cmd, encoding='utf-8', timeout=30):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                encoding=encoding
+                encoding=encoding,
+                env=child_env,
             )
             stdout, stderr = proc.communicate(timeout=timeout)
             result_queue.put((stdout.strip(), stderr.strip(), proc.returncode))

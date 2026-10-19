@@ -280,6 +280,28 @@ class ADBService:
             return False
 
     @staticmethod
+    def verify_remote_file(ip, remote_file, local_md5, device_id=None, password=None):
+        """推送后校验：终端侧**存在性 + MD5**（借鉴参考实现 file_pusher 的收尾校验）。
+
+        返回 ``(是否通过, 说明)``：
+        - 文件不存在 → 不通过
+        - MD5 一致 → 通过
+        - MD5 取不到但文件存在 → 降级通过（存在性校验），说明中标注
+        """
+        exists = ADBService.check_file_exists(
+            ip, remote_file, max_retries=1, device_id=device_id, password=password)
+        if not exists:
+            return False, "终端侧文件不存在"
+
+        remote_md5 = ADBService.calc_file_md5(
+            ip, remote_file, device_id=device_id, password=password)
+        if remote_md5 is None:
+            return True, "终端侧文件存在（MD5 不可读，已降级为存在性校验）"
+        if remote_md5 != local_md5:
+            return False, f"MD5 不一致: 本地={local_md5} 远端={remote_md5}"
+        return True, f"终端侧存在且 MD5 一致: {local_md5}"
+
+    @staticmethod
     def push_file_reliable(ip, password, local_file, remote_file, max_retries=3, device_id=None):
         """可靠的adb推送文件方法，带有重试和MD5校验"""
         if not os.path.exists(local_file):
@@ -339,21 +361,22 @@ class ADBService:
                     ADBService.disconnect()
                     return stdout, stderr, returncode
 
-                remote_md5 = ADBService.calc_file_md5(ip, remote_file, device_id=device_id, password=password)
-                if remote_md5 and remote_md5 == local_md5:
+                remote_md5_ok, verify_msg = ADBService.verify_remote_file(
+                    ip, remote_file, local_md5, device_id=device_id, password=password)
+                if remote_md5_ok:
                     ADBService.disconnect()
-                    return f"推送成功，MD5: {local_md5}", "", 0
-                else:
-                    if attempt < max_retries - 1:
-                        time.sleep(2)
-                        continue
-                    ADBService.disconnect()
-                    return "", f"MD5校验失败: 本地={local_md5}, 远程={remote_md5}", -3
+                    return f"推送成功，{verify_msg}", "", 0
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                ADBService.disconnect()
+                return "", f"推送校验失败: {verify_msg}", -3
 
             except Exception as e:
                 if attempt < max_retries - 1:
                     time.sleep(2)
                     continue
+                ADBService.disconnect()
                 return "", str(e), -1
 
         ADBService.disconnect()
