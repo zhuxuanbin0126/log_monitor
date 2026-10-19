@@ -113,10 +113,13 @@ class ADBDeviceManager:
                     _log("INFO", f"{device_id} 网络 ADB 已开启（plink 兜底），serial={serial}")
                     return True, f"网络 ADB 已开启（plink 兜底），serial={serial}"
 
-            # getprop 仅作为辅助诊断
+            # adb devices 状态 + getprop 仅作为辅助诊断（不再作为成败判据）
+            state = ADBService.list_devices().get(f"{ip}:5555", "未列出")
             _, prop_value = cls.check_internet_adb_enabled(ip, password, device_id, timeout=3)
-            _log("ERROR", f"{device_id} adb connect 验证失败，persist.internet_adb_enable={prop_value}")
-            return False, f"adb connect 验证失败，persist.internet_adb_enable={prop_value}"
+            _log("ERROR", f"{device_id} adb connect 验证失败: adb状态={state}, "
+                          f"persist.internet_adb_enable={prop_value!r}, {detail}")
+            return False, (f"adb connect 验证失败（adb状态={state}, "
+                           f"persist.internet_adb_enable={prop_value!r}）")
 
         except Exception as e:
             _log("ERROR", f"开启网络 ADB 失败: {e}")
@@ -160,17 +163,23 @@ class ADBDeviceManager:
 
     @classmethod
     def _verify_adb_connect(cls, ip, device_id, attempts=5):
-        """adb connect 实际验证连通性；返回 ``(是否连通, serial, 末次诊断)``。"""
+        """adb connect 实际验证连通性；返回 ``(是否连通, serial, 末次诊断)``。
+
+        判据：``adb devices`` 中该 serial 的**状态列必须为 ``device``**。
+        ``connected to ...`` 只说明 TCP 已连通，设备仍可能处于 ``offline`` /
+        ``unauthorized``；而网络 ADB 的 serial 恒为 ``ip:5555``，因此**不能用**
+        「serial 是否以 ``ip:`` 开头」来判断可用性（旧实现的判定 bug）。
+        """
         detail = ""
         for _ in range(attempts):
-            ADBService.disconnect()
+            ADBService.disconnect_device(ip)
             time.sleep(0.2)
             stdout, stderr, rc = ADBService.connect(ip)
             detail = f"rc={rc} stdout={stdout!r} stderr={stderr!r}"
             _log("INFO", f"验证 connect {ip}: {detail}")
             if rc == 0 and "connected" in stdout.lower():
-                serial = ADBService.get_device_serial(ip)
-                if serial and not serial.startswith(f"{ip}:"):
+                serial = ADBService.get_online_serial(ip)
+                if serial:
                     cls._put_pooled_connection(ip, serial)
                     cls.set_cached_status(device_id, '开启')
                     return True, serial, detail
@@ -220,14 +229,15 @@ class ADBDeviceManager:
             cls._invalidate_pool(ip)
 
         for attempt in range(max_attempts):
-            # 2. 直接连接
-            ADBService.disconnect()
+            # 2. 直接连接（只断开本设备，避免并行刷新时误伤其它设备）
+            ADBService.disconnect_device(ip)
             time.sleep(0.2)
             stdout, stderr, rc = ADBService.connect(ip)
             _log("INFO", f"attempt {attempt + 1} connect {ip}: rc={rc} stdout={stdout!r} stderr={stderr!r}")
             if rc == 0 and "connected" in stdout.lower():
-                serial = ADBService.get_device_serial(ip)
-                if serial and not serial.startswith(f"{ip}:"):
+                # 判据同 _verify_adb_connect：状态列必须为 device
+                serial = ADBService.get_online_serial(ip)
+                if serial:
                     _log("INFO", f"已连接, serial={serial}")
                     cls._put_pooled_connection(ip, serial)
                     cls.set_cached_status(device_id, '开启')

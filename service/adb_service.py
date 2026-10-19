@@ -209,6 +209,39 @@ class ADBService:
         ADBService._restart_adbd(ip, password)
 
     @staticmethod
+    def list_devices():
+        """解析 ``adb devices`` 输出为 ``{serial: state}``。
+
+        仅统计 ``<serial>\\t<state>`` 形式的有效行，忽略 ``List of devices attached``
+        与 daemon 提示行（``* daemon ...``）。
+        """
+        devices = {}
+        try:
+            stdout, _, returncode = run_command(f"{ADB_PATH} devices", timeout=10)
+        except Exception:
+            return devices
+        if returncode != 0 or not stdout:
+            return devices
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line or line.startswith("List of devices") or line.startswith("*"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                devices[parts[0]] = parts[1]
+        return devices
+
+    @staticmethod
+    def get_online_serial(ip, port=5555):
+        """仅当 ``adb devices`` 中该设备状态为 ``device`` 时返回其 serial，否则 None。
+
+        网络 ADB 的 serial 恒为 ``ip:port`` 形态，故**不能**用「serial 是否以 ip: 开头」
+        判断可用性；必须看状态列——``offline`` / ``unauthorized`` / 未列出 均视为不可用。
+        """
+        target = f"{ip}:{port}"
+        return target if ADBService.list_devices().get(target) == "device" else None
+
+    @staticmethod
     def connect(ip):
         """使用adb连接设备"""
         cmd = f"{ADB_PATH} connect {ip}:5555"
