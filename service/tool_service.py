@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta
 import re
 import json
-from config import supported_dev_types, getinfo_path
+from config import supported_dev_types, getinfo_path, USE_PYTHON_PASSWORD
 import html
 import threading
 import queue
@@ -22,6 +22,7 @@ from .device_utils import (
 from .adb_service import ADBService
 from .adb_device_manager import ADBDeviceManager
 from .logging_service import get_logger
+from .password_service import get_password as compute_password
 
 logger = get_logger(__name__)
              
@@ -324,8 +325,23 @@ class ToolService:
     @staticmethod
     def get_password(device_id):
         """
-        调用HPassword.exe获取设备密码，增加重试机制
+        获取设备密码。
+
+        默认走纯 Python 计算引擎（与 HPassword.exe 输出逐字节一致，且无需拉起外部
+        进程、无重试等待）；可通过 ``config.USE_PYTHON_PASSWORD`` 关闭并回退到
+        调用 HPassword.exe。
         """
+        if not device_id:
+            return ""
+
+        if USE_PYTHON_PASSWORD:
+            password = compute_password(device_id)
+            if password:
+                return password
+            logger.error("设备 %s 密码计算失败（纯 Python 引擎）", device_id)
+            return ""
+
+        # 旧通道兜底：调用 HPassword.exe，保留重试机制
         max_retries = 3
         for attempt in range(max_retries):
             hpassword_exe = ToolService.get_tool_path('HPassword.exe')
@@ -334,7 +350,6 @@ class ToolService:
                 logger.warning("HPassword.exe 错误 (尝试 %s/%s): %s", attempt + 1, max_retries, stderr)
                 if "Access denied" in stderr or "password was not accepted" in stderr:
                     # 等待一段时间后重试
-                    import time
                     time.sleep(2)
                     continue
                 return ""
@@ -344,7 +359,6 @@ class ToolService:
                 return password
             
             # 如果密码为空，等待后重试
-            import time
             time.sleep(2)
         
         logger.error("HPassword.exe 获取设备 %s 密码失败，已达到最大重试次数", device_id)
