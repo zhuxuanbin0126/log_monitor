@@ -141,7 +141,7 @@ def get_init_grouped_configs(selected_device_types):
                 "devices": ["D16", "D36", ...],
                 "config": {...},  # 开关机初始化配置
                 "chip_model": "PX30",
-                "system_version": "Liunx"
+                "system_version": "Linux"
             }
         }
     """

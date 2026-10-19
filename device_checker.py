@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from service.tool_service import ToolService
 from business.device_monitor_service import DeviceMonitorService
 from config import tool_path
+from contextlib import contextmanager
 
 
 # ==================== 配置区域 - 在此配置您的设备信息 ====================
@@ -61,6 +62,46 @@ class DeviceChecker:
     def __init__(self):
         self.devices = []
         self.results = {}
+        self._check_step = 0
+
+    @contextmanager
+    def _section(self, title, step_label=None):
+        """上下文管理器：自动打印检查节的头尾分隔线"""
+        if step_label is None:
+            step_label = title
+        print(f"\n{'='*60}")
+        print(f"[{step_label}] {title}")
+        print(f"{'='*60}")
+        try:
+            yield
+        except Exception as e:
+            print(f"  ⚠️ 检查异常: {e}")
+
+    @staticmethod
+    def _safe_parse_int(text, index=0, separator=None):
+        """安全解析命令输出中的整数，失败时返回 None"""
+        if not text or not text.strip():
+            return None
+        try:
+            if separator:
+                parts = text.strip().split(separator)
+            else:
+                parts = text.strip().split()
+            if index < len(parts):
+                return int(parts[index])
+            return None
+        except (ValueError, IndexError, TypeError):
+            return None
+
+    @staticmethod
+    def _safe_extract_csv_field(line, index, default='N/A'):
+        """安全提取 CSV 行的指定字段"""
+        if not line or not line.strip():
+            return default
+        parts = line.strip().split(',')
+        if len(parts) > index:
+            return parts[index]
+        return default
         
     def get_device_password(self, device_id):
         """获取设备密码"""
@@ -72,48 +113,41 @@ class DeviceChecker:
     
     def check_device_connection(self, ip, password):
         """检查设备连接状态"""
-        print(f"\n{'='*60}")
-        print(f"[1/10] 检查设备连接 - IP: {ip}")
-        print(f"{'='*60}")
-        
-        try:
-            # 初始化连接
-            print("正在初始化SSH连接...")
-            stdout, stderr, returncode = ToolService.initialize_connection(ip, password)
-            if stderr:
-                print(f"⚠️  SSH连接警告: {stderr}")
-            else:
-                print("✅ SSH连接初始化成功")
-            
-            return True
-        except Exception as e:
-            print(f"❌ 设备连接失败: {e}")
-            return False
+        with self._section(f"检查设备连接 - IP: {ip}", "1/10"):
+            try:
+                print("正在初始化SSH连接...")
+                stdout, stderr, returncode = ToolService.initialize_connection(ip, password)
+                if stderr:
+                    print(f"⚠️  SSH连接警告: {stderr}")
+                else:
+                    print("✅ SSH连接初始化成功")
+                
+                return True
+            except Exception as e:
+                print(f"❌ 设备连接失败: {e}")
+                return False
     
     def check_system_type(self, ip, password):
         """检查系统类型"""
-        print(f"\n{'='*60}")
-        print(f"[2/10] 检查系统类型")
-        print(f"{'='*60}")
-        
-        try:
-            # 检查是否是Android系统
-            stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, "ls /data", ".")
-            if not stderr and "No such" not in stdout:
-                print("✅ 检测到 Android 系统")
-                return "Android"
-            
-            # 检查是否是Linux系统
-            stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, "ls /root/Box", ".")
-            if not stderr and "No such" not in stdout:
-                print("✅ 检测到 Linux 系统")
-                return "Linux"
-            
-            print("⚠️  无法确定系统类型")
-            return "Unknown"
-        except Exception as e:
-            print(f"❌ 检查系统类型失败: {e}")
-            return "Unknown"
+        with self._section("检查系统类型", "2/10"):
+            try:
+                # 检查是否是Android系统
+                stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, "ls /data", ".")
+                if not stderr and "No such" not in stdout:
+                    print("✅ 检测到 Android 系统")
+                    return "Android"
+                
+                # 检查是否是Linux系统
+                stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, "ls /root/Box", ".")
+                if not stderr and "No such" not in stdout:
+                    print("✅ 检测到 Linux 系统")
+                    return "Linux"
+                
+                print("⚠️  无法确定系统类型")
+                return "Unknown"
+            except Exception as e:
+                print(f"❌ 检查系统类型失败: {e}")
+                return "Unknown"
     
     def check_paths(self, ip, password, system_type):
         """检查关键路径"""
@@ -220,7 +254,9 @@ class DeviceChecker:
             # 检查swich_counter.csv
             stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, f"wc -l {base_path}/swich_counter.csv 2>/dev/null || echo 0", ".")
             if not stderr and stdout.strip() != "0":
-                count = int(stdout.strip().split()[0]) - 1
+                count = self._safe_parse_int(stdout)
+                if count is not None:
+                    count = max(0, count - 1)
                 print(f"✅ 开关机次数: {count}")
                 
                 # 显示最新几条记录
@@ -236,7 +272,9 @@ class DeviceChecker:
             # 检查network_counter.csv
             stdout, stderr, returncode = ToolService.ssh_execute_command(ip, password, f"wc -l {base_path}/network_counter.csv 2>/dev/null || echo 0", ".")
             if not stderr and stdout.strip() != "0":
-                count = int(stdout.strip().split()[0]) - 1
+                count = self._safe_parse_int(stdout)
+                if count is not None:
+                    count = max(0, count - 1)
                 print(f"✅ 网络开关机次数: {count}")
             else:
                 print(f"⚠️  无法获取网络开关机次数或文件不存在")

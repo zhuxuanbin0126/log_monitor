@@ -274,7 +274,16 @@ pyinstaller --onedir --windowed --add-data "*.exe;" --add-data "*.dll;" main.py
 
 ## 📝 更新日志
 
-### v1.0.3.0 (当前版本)
+### v1.0.6.0 (当前版本)
+- ✅ 新增 ADB 状态列，展示设备 ADB 开启情况
+- ✅ Android 设备 ADB 自动开启，开启后自动回读 MAC/设备名/系统/版本信息
+- ✅ 查询流程支持 ADB 并行处理，并新增设备级状态信号
+- ✅ 服务层拆分：ADBService / DeviceUtils / ADBDeviceManager / ScreenshotService / DeviceLogService
+- ✅ 引入数据模型（OperationResult / DeviceState / MonitorConfig / QueryType）与统一重试装饰器
+- ✅ 回补 requirements.txt，统一工程配置与版本号
+- ✅ 清理入库的构建产物与运行数据，修正 .gitignore 规则
+
+### v1.0.3.0
 - ✅ 设备自动发现和列表管理
 - ✅ 多维度实时监控功能
 - ✅ 智能错误处理和友好提示

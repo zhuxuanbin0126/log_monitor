@@ -1,0 +1,41 @@
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# ============ 构建产物 ============
+build/
+dist/
+release/
+output/
+output_*/
+*.xlsx
+*.zip
+
+# ============ 运行数据 ============
+switch_log/
+device_cache.json
+device_monitoring_data.json
+device_error.txt
+*.log
+screenshot/
+
+# ============ IDE / 操作系统 ============
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*.tmp
+
+# ============ 必须入库 ============
+!.github/
+!.github/workflows/
+!log_monitor.spec
+!requirements.txt
+!tools/bin/

@@ -25,482 +25,7 @@ from service.file_service import FileService
 from service.data_processing_service import DataProcessingService
 from config import get_base_dir, supported_dev_types, tool_path, program_path
 from device_config import get_init_grouped_configs, get_upgrade_grouped_configs, get_device_config
-
-
-class CountInitConfirmDialog(QDialog):
-    """开关机初始化确认对话框
-    
-    功能：
-    1. 根据选中的设备类型分组显示
-    2. 显示每组需要推送的文件及远程路径
-    3. 允许用户自定义本地文件路径（默认为tools目录）
-    """
-    
-    def __init__(self, selected_devices_info, default_tool_path, parent=None):
-        """
-        参数:
-            selected_devices_info: 选中的设备信息列表 [{id, ip, password, ...}, ...]
-            default_tool_path: 默认工具文件路径
-            parent: 父窗口
-        """
-        super().__init__(parent)
-        self.selected_devices_info = selected_devices_info
-        self.default_tool_path = default_tool_path
-        self.file_paths = {}  # 存储用户自定义的文件路径 {文件名: 本地路径}
-        self.grouped_devices = {}  # {分组key: [设备信息列表]}
-        
-        self.setWindowTitle("开关机初始化确认")
-        self.setMinimumWidth(700)
-        self.setMinimumHeight(500)
-        
-        self._group_by_config()
-        self._init_ui()
-        
-    def _group_by_config(self):
-        """从 device_info.json 动态加载配置并按配置分组"""
-        # 收集所有选中设备的型号前缀
-        device_types = []
-        for device_info in self.selected_devices_info:
-            device_id = device_info['id']
-            dev_type_prefix = device_id.split('-')[0] if '-' in device_id else device_id
-            device_types.append(dev_type_prefix)
-        
-        # 从 device_info.json 加载分组配置
-        self.grouped_configs = get_init_grouped_configs(device_types)
-        
-        # 将设备信息映射到各分组
-        self.grouped_devices = {}
-        for device_info in self.selected_devices_info:
-            device_id = device_info['id']
-            dev_type_prefix = device_id.split('-')[0] if '-' in device_id else device_id
-            config = get_device_config(dev_type_prefix)
-            
-            if config and config.get("开关机初始化"):
-                config_sig = json.dumps(config["开关机初始化"], sort_keys=True, ensure_ascii=False)
-                if config_sig not in self.grouped_devices:
-                    self.grouped_devices[config_sig] = []
-                self.grouped_devices[config_sig].append(device_info)
-            else:
-                unknown_key = f"unknown_{dev_type_prefix}"
-                if unknown_key not in self.grouped_devices:
-                    self.grouped_devices[unknown_key] = []
-                self.grouped_devices[unknown_key].append(device_info)
-    
-    def _init_ui(self):
-        """初始化UI界面"""
-        layout = QVBoxLayout(self)
-        
-        # 标题说明
-        title_label = QLabel(f"已选中 {len(self.selected_devices_info)} 台设备，按类型分组如下：")
-        title_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px;")
-        layout.addWidget(title_label)
-        
-        # 创建滚动区域
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        
-        # 为每个分组创建显示区域
-        for config_sig, devices in self.grouped_devices.items():
-            group_data = self.grouped_configs.get(config_sig)
-            if group_data:
-                config = group_data["config"]
-                chip = group_data.get("chip_model", "")
-                version = group_data.get("system_version", "")
-            else:
-                config = None
-                chip = "未知"
-                version = "未知"
-            
-            device_ids = [d['id'] for d in devices]
-            if config:
-                title = f"主控: {chip} | 系统: {version} | ({len(devices)}台)"
-            else:
-                title = f"设备: {', '.join(device_ids)} (无初始化配置)"
-            
-            group_box = QGroupBox(title)
-            group_layout = QGridLayout(group_box)
-            
-            if config:
-                devices_label = QLabel("设备型号: " + ", ".join(devices))
-                devices_label.setWordWrap(True)
-                group_layout.addWidget(devices_label, 0, 0, 1, 3)
-                
-                # 显示需要推送的文件
-                if config.get("files"):
-                    file_header = QLabel("需要推送的文件:")
-                    file_header.setStyleSheet("font-weight: bold; padding-top: 5px;")
-                    group_layout.addWidget(file_header, 1, 0, 1, 3)
-                    
-                    for row_idx, file_info in enumerate(config["files"], start=2):
-                        filename = file_info["local"]
-                        remote_path = file_info["remote"]
-                        desc = file_info["desc"]
-                        file_row = 2 + (row_idx - 2) * 2  # 每个文件占2行
-                        
-                        # 文件描述
-                        desc_label = QLabel(f"{desc} ({filename})")
-                        group_layout.addWidget(desc_label, file_row, 0)
-                        
-                        # 远程路径显示
-                        remote_label = QLabel(f"→ {remote_path}")
-                        remote_label.setStyleSheet("color: gray;")
-                        group_layout.addWidget(remote_label, file_row, 1)
-                        
-                        # 本地文件路径选择（下一行）
-                        path_edit = QLineEdit()
-                        default_path = os.path.join(self.default_tool_path, filename)
-                        path_edit.setText(default_path)
-                        path_edit.setMinimumWidth(350)
-                        self.file_paths[filename] = default_path
-                        group_layout.addWidget(path_edit, file_row + 1, 0, 1, 2)
-                        
-                        # 浏览按钮（下一行）
-                        browse_btn = QPushButton("浏览...")
-                        browse_btn.clicked.connect(lambda checked, edit=path_edit, fname=filename: 
-                                                  self._on_browse_file(edit, fname))
-                        group_layout.addWidget(browse_btn, file_row + 1, 3)
-                
-                # 显示额外命令
-                extra_commands = config.get("extra_commands", [])
-                if extra_commands:
-                    files_count = len(config.get("files", []))
-                    row_offset = 2 + files_count * 2  # 每个文件占2行
-                    extra_label = QLabel("额外命令:")
-                    extra_label.setStyleSheet("font-weight: bold; padding-top: 5px;")
-                    group_layout.addWidget(extra_label, row_offset, 0, 1, 4)
-                    for cmd_idx, cmd in enumerate(extra_commands):
-                        cmd_text = QLabel(f"  {cmd}")
-                        cmd_text.setStyleSheet("color: #666;")
-                        group_layout.addWidget(cmd_text, row_offset + 1 + cmd_idx, 0, 1, 4)
-                
-                # 显示flag文件路径
-                flag_path = config.get("flag_path", "")
-                if flag_path:
-                    extra_count = len(config.get("extra_commands", []))
-                    files_count = len(config.get("files", []))
-                    flag_row = 2 + files_count * 2 + (1 + extra_count if extra_commands else 0)  # 每个文件占2行
-                    flag_label = QLabel(f"Flag文件路径: {flag_path}")
-                    flag_label.setStyleSheet("color: blue; padding-top: 5px;")
-                    group_layout.addWidget(flag_label, flag_row, 0, 1, 4)
-            else:
-                no_config_label = QLabel(f"设备: {', '.join(devices)} (无初始化配置)")
-                no_config_label.setStyleSheet("color: red; padding: 5px;")
-                group_layout.addWidget(no_config_label, 0, 0, 1, 4)
-            
-            scroll_layout.addWidget(group_box)
-        
-        scroll_layout.addStretch()
-        scroll.setWidget(scroll_content)
-        layout.addWidget(scroll)
-        
-        # 操作说明
-        info_label = QLabel("提示: 可点击“浏览...”按钮自定义本地文件路径，默认使用tools目录下的文件")
-        info_label.setStyleSheet("color: gray; padding: 5px;")
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
-        
-        # 按钮区域
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        
-        confirm_btn = QPushButton("确认初始化")
-        confirm_btn.setMinimumWidth(120)
-        confirm_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 8px;")
-        confirm_btn.clicked.connect(self._on_confirm)
-        
-        cancel_btn = QPushButton("取消")
-        cancel_btn.setMinimumWidth(120)
-        cancel_btn.clicked.connect(self.reject)
-        
-        btn_layout.addWidget(confirm_btn)
-        btn_layout.addWidget(cancel_btn)
-        layout.addLayout(btn_layout)
-    
-    def _on_browse_file(self, path_edit, filename):
-        """浏览选择文件"""
-        current_path = path_edit.text()
-        initial_dir = os.path.dirname(current_path) if os.path.exists(current_path) else self.default_tool_path
-        
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, f"选择 {filename} 文件", initial_dir, 
-            f"{filename} ({filename});;All Files (*)"
-        )
-        
-        if file_path:
-            path_edit.setText(file_path)
-            self.file_paths[filename] = file_path
-    
-    def _on_confirm(self):
-        """确认按钮点击"""
-        # 从UI重新获取所有路径
-        # 遍历所有QLineEdit并更新file_paths
-        for i in range(self.layout().count()):
-            item = self.layout().itemAt(i)
-            if item.widget() and isinstance(item.widget(), QScrollArea):
-                scroll = item.widget()
-                scroll_content = scroll.widget()
-                self._update_paths_from_layout(scroll_content.layout())
-        
-        # 验证文件是否存在
-        missing_files = []
-        for filename, filepath in self.file_paths.items():
-            if not os.path.exists(filepath):
-                missing_files.append(f"{filename}: {filepath}")
-        
-        if missing_files:
-            QMessageBox.warning(self, "文件不存在", 
-                              f"以下文件不存在，请检查路径:\n\n" + "\n".join(missing_files))
-            return
-        
-        self.accept()
-    
-    def _update_paths_from_layout(self, layout):
-        """从布局中更新文件路径"""
-        for i in range(layout.count()):
-            item = layout.itemAt(i)
-            if item.widget():
-                widget = item.widget()
-                if isinstance(widget, QGroupBox):
-                    # 查找GroupBox内的QLineEdit
-                    group_layout = widget.layout()
-                    if group_layout:
-                        self._extract_paths_from_grid(group_layout)
-            elif item.layout():
-                self._update_paths_from_layout(item.layout())
-    
-    def _extract_paths_from_grid(self, grid_layout):
-        """从网格布局中提取文件路径"""
-        for i in range(grid_layout.count()):
-            item = grid_layout.itemAt(i)
-            if item.widget() and isinstance(item.widget(), QLineEdit):
-                path_text = item.widget().text()
-                # 从路径中提取文件名
-                filename = os.path.basename(path_text)
-                if filename:
-                    self.file_paths[filename] = path_text
-    
-    def get_file_paths(self):
-        """获取用户自定义的文件路径"""
-        return self.file_paths.copy()
-    
-    def get_grouped_devices(self):
-        """获取分组后的设备信息"""
-        return self.grouped_devices.copy()
-
-
-class UpgradeConfirmDialog(QDialog):
-    """发送节目确认对话框"""
-    
-    def __init__(self, selected_devices_info, default_program_path, parent=None):
-        super().__init__(parent)
-        self.selected_devices_info = selected_devices_info
-        self.default_program_path = default_program_path
-        self.file_paths = {}
-        
-        self.setWindowTitle("发送节目确认")
-        self.setMinimumWidth(700)
-        self.setMinimumHeight(500)
-        
-        self._group_by_config()
-        self._init_ui()
-    
-    def _group_by_config(self):
-        device_types = []
-        for device_info in self.selected_devices_info:
-            device_id = device_info['id']
-            dev_type_prefix = device_id.split('-')[0] if '-' in device_id else device_id
-            device_types.append(dev_type_prefix)
-        
-        self.grouped_configs = get_upgrade_grouped_configs(device_types)
-        
-        self.grouped_devices = {}
-        for device_info in self.selected_devices_info:
-            device_id = device_info['id']
-            dev_type_prefix = device_id.split('-')[0] if '-' in device_id else device_id
-            config = get_device_config(dev_type_prefix)
-            
-            if config and config.get("发送节目"):
-                sys_type = "安卓系列" if "android" in config.get("系统版本", "").lower() else "常规系列"
-                group_key = sys_type
-            else:
-                group_key = f"unknown_{dev_type_prefix}"
-            
-            if group_key not in self.grouped_devices:
-                self.grouped_devices[group_key] = []
-            self.grouped_devices[group_key].append(device_info)
-    
-    def _init_ui(self):
-        layout = QVBoxLayout(self)
-        
-        title_label = QLabel(f"已选中 {len(self.selected_devices_info)} 台设备，按配置分组如下：")
-        title_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px;")
-        layout.addWidget(title_label)
-        
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        
-        for group_key, devices in self.grouped_devices.items():
-            group_data = self.grouped_configs.get(group_key)
-            if group_data:
-                config = group_data["config"]
-                sys_type = group_data.get("system_type", "")
-            else:
-                config = None
-                sys_type = "未知"
-            
-            device_ids = [d['id'] for d in devices]
-            if config:
-                title = f"{sys_type} ({len(devices)}台)"
-            else:
-                title = f"设备: {', '.join(device_ids)} (无发送节目配置)"
-            
-            group_box = QGroupBox(title)
-            group_layout = QGridLayout(group_box)
-            
-            if config:
-                devices_label = QLabel("设备型号: " + ", ".join(device_ids))
-                devices_label.setWordWrap(True)
-                group_layout.addWidget(devices_label, 0, 0, 1, 4)
-                
-                row = 1
-                for device_info in devices:
-                    dev_type = device_info['id'].split('-')[0] if '-' in device_info['id'] else device_info['id']
-                    program_name = config["program_name"].replace("{model}", dev_type)
-                    remote_dir = config["remote_dir"]
-                    restart_cmd = config.get("restart_cmd", "")
-                    pre_commands = config.get("pre_commands", [])
-                    
-                    prog_label = QLabel(f"节目文件 ({dev_type}):")
-                    group_layout.addWidget(prog_label, row, 0)
-                    
-                    remote_label = QLabel(f"-> {remote_dir}/{program_name}")
-                    remote_label.setStyleSheet("color: gray;")
-                    group_layout.addWidget(remote_label, row, 1)
-                    
-                    # 本地文件路径（下一行）
-                    path_edit = QLineEdit()
-                    default_path = os.path.join(self.default_program_path, program_name)
-                    path_edit.setText(default_path)
-                    path_edit.setMinimumWidth(350)
-                    self.file_paths[dev_type] = default_path
-                    group_layout.addWidget(path_edit, row + 1, 0, 1, 2)
-                    
-                    # 浏览按钮（下一行）
-                    browse_btn = QPushButton("\u6d4f\u89c8...")
-                    browse_btn.clicked.connect(lambda checked, edit=path_edit, dt=dev_type: 
-                                              self._on_browse_file(edit, dt, program_name))
-                    group_layout.addWidget(browse_btn, row + 1, 3)
-                    
-                    row += 2  # 每个设备占2行
-                
-                if pre_commands:
-                    pre_label = QLabel("\u524d\u7f6e\u547d\u4ee4:")
-                    pre_label.setStyleSheet("font-weight: bold; padding-top: 5px;")
-                    group_layout.addWidget(pre_label, row, 0, 1, 4)
-                    row += 1
-                    for cmd in pre_commands:
-                        cmd_text = QLabel(f"  {cmd}")
-                        cmd_text.setStyleSheet("color: #666;")
-                        group_layout.addWidget(cmd_text, row, 0, 1, 4)
-                        row += 1
-                
-                restart_label = QLabel(f"\u91cd\u542f\u547d\u4ee4: {restart_cmd}")
-                restart_label.setStyleSheet("color: blue; padding-top: 5px;")
-                group_layout.addWidget(restart_label, row, 0, 1, 4)
-            else:
-                no_config_label = QLabel("\u672a\u5728 device_info.json \u4e2d\u627e\u5230\u6b64\u8bbe\u5907\u7684\u53d1\u9001\u8282\u76ee\u914d\u7f6e")
-                no_config_label.setStyleSheet("color: red; padding: 5px;")
-                group_layout.addWidget(no_config_label, 1, 0, 1, 4)
-            
-            scroll_layout.addWidget(group_box)
-        
-        scroll_layout.addStretch()
-        scroll.setWidget(scroll_content)
-        layout.addWidget(scroll)
-        
-        info_label = QLabel("\u63d0\u793a: \u914d\u7f6e\u6765\u6e90\u4e8e device_info.json, \u53ef\u70b9\u51fb\u201c\u6d4f\u89c8...\u201d\u6309\u94ae\u81ea\u5b9a\u4e49\u672c\u5730\u8282\u76ee\u6587\u4ef6\u8def\u5f84")
-        info_label.setStyleSheet("color: gray; padding: 5px;")
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
-        
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        
-        confirm_btn = QPushButton("\u786e\u8ba4\u53d1\u9001")
-        confirm_btn.setMinimumWidth(120)
-        confirm_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 8px;")
-        confirm_btn.clicked.connect(self._on_confirm)
-        
-        cancel_btn = QPushButton("\u53d6\u6d88")
-        cancel_btn.setMinimumWidth(120)
-        cancel_btn.clicked.connect(self.reject)
-        
-        btn_layout.addWidget(confirm_btn)
-        btn_layout.addWidget(cancel_btn)
-        layout.addLayout(btn_layout)
-    
-    def _on_browse_file(self, path_edit, dev_type, program_name):
-        current_path = path_edit.text()
-        initial_dir = os.path.dirname(current_path) if os.path.exists(current_path) else self.default_program_path
-        
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, f"选择 {dev_type} 的节目文件", initial_dir, 
-            "TAR.GZ Files (*.tar.gz);;All Files (*)"
-        )
-        
-        if file_path:
-            path_edit.setText(file_path)
-            self.file_paths[dev_type] = file_path
-    
-    def _on_confirm(self):
-        for i in range(self.layout().count()):
-            item = self.layout().itemAt(i)
-            if item.widget() and isinstance(item.widget(), QScrollArea):
-                scroll = item.widget()
-                scroll_content = scroll.widget()
-                if scroll_content:
-                    self._update_paths_from_layout(scroll_content.layout())
-        
-        missing_files = []
-        for dev_type, filepath in self.file_paths.items():
-            if not os.path.exists(filepath):
-                missing_files.append(f"{dev_type}: {filepath}")
-        
-        if missing_files:
-            QMessageBox.warning(self, "文件不存在", 
-                              f"以下节目文件不存在，请检查路径:\n\n" + "\n".join(missing_files))
-            return
-        
-        self.accept()
-    
-    def _update_paths_from_layout(self, layout):
-        for i in range(layout.count()):
-            item = layout.itemAt(i)
-            if item.widget():
-                widget = item.widget()
-                if isinstance(widget, QGroupBox):
-                    group_layout = widget.layout()
-                    if group_layout:
-                        self._extract_paths_from_grid(group_layout)
-            elif item.layout():
-                self._update_paths_from_layout(item.layout())
-    
-    def _extract_paths_from_grid(self, grid_layout):
-        for i in range(grid_layout.count()):
-            item = grid_layout.itemAt(i)
-            if item.widget() and isinstance(item.widget(), QLineEdit):
-                path_text = item.widget().text()
-                filename = os.path.basename(path_text)
-                if filename:
-                    dev_type = filename.split('_')[0] if '_' in filename else filename
-                    self.file_paths[dev_type] = path_text
-    
-    def get_file_paths(self):
-        return self.file_paths.copy()
+from .dialogs import CountInitConfirmDialog, UpgradeConfirmDialog
 
 
 class MainWindow(BaseWindow):
@@ -530,12 +55,6 @@ class MainWindow(BaseWindow):
         # 初始化日志文件
         base_dir = get_base_dir(self.dev_type)
         FileService.init_log_files(base_dir)
-        
-        # 自动刷新设备列表的定时器
-        # self.auto_refresh_timer = QTimer(self)
-        # self.auto_refresh_timer.setInterval(60000)  # 默认60秒刷新一次
-        # self.auto_refresh_timer.timeout.connect(self.refresh_device_list)
-        # self.auto_refresh_timer.start()  # 启动自动刷新
         
         # 创建并初始化各个组件
         self.init_components()
@@ -585,6 +104,71 @@ class MainWindow(BaseWindow):
         
         # 结果显示信号连接
         self.result_display_view.clear_log_clicked.connect(self.on_clear_log)
+
+    def refresh_android_device_info_after_adb(self, device_id, ip, password):
+        """
+        Android 设备 ADB 开启后，重新获取并刷新设备列表中的 MAC、设备名、系统类型、版本等信息。
+        使用 ADB 方式获取，避免再次走 SSH 造成延迟。
+        """
+        try:
+            from service.adb_device_manager import ADBDeviceManager
+            from service.adb_service import ADBService
+            from service.tool_service import ToolService
+            from service.device_utils import ADB_PATH
+
+            if not ADBDeviceManager.should_use_adb(device_id):
+                return
+
+            success, serial = ADBDeviceManager.ensure_adb_connected(ip, password, device_id)
+            if not success:
+                return
+
+            # 使用 adb -s serial shell 批量获取信息
+            mac_cmd = f'{ADB_PATH} -s {serial} shell cat /sys/class/net/eth0/address'
+            name_cmd = f'{ADB_PATH} -s {serial} shell getprop ro.product.model'
+            version_cmd = f'{ADB_PATH} -s {serial} shell getprop ro.build.version'
+
+            mac_stdout, _, _ = ToolService.run_command(mac_cmd, timeout=5)
+            name_stdout, _, _ = ToolService.run_command(name_cmd, timeout=5)
+            version_stdout, _, _ = ToolService.run_command(version_cmd, timeout=5)
+
+            mac_address = mac_stdout.strip() if mac_stdout else 'N/A'
+            device_name = name_stdout.strip() if name_stdout else 'N/A'
+            ota_version = version_stdout.strip() if version_stdout else 'N/A'
+            system_type = 'Android'
+
+            # 主版本通过 dumpsys package 获取（播放器版本）
+            main_version = 'N/A'
+            dumpsys_cmd = f'{ADB_PATH} -s {serial} shell dumpsys package cn.huidu.lcd.player'
+            dumpsys_out, _, _ = ToolService.run_command(dumpsys_cmd, timeout=10)
+            if dumpsys_out:
+                for line in dumpsys_out.strip().split('\n'):
+                    if 'versionName' in line:
+                        parts = line.split('=', 1)
+                        if len(parts) > 1:
+                            main_version = parts[1].strip()
+                            break
+
+            # 刷新 UI 表格
+            self.device_list_view.update_device_info_field(device_id, 'mac_address', mac_address)
+            self.device_list_view.update_device_info_field(device_id, 'device_name', device_name)
+            self.device_list_view.update_device_info_field(device_id, 'system_type', system_type)
+            self.device_list_view.update_device_info_field(device_id, 'ota_version', ota_version)
+            self.device_list_view.update_device_info_field(device_id, 'main_version', main_version)
+            self.device_list_view.update_device_info_field(device_id, 'adb_status', '开启')
+
+            # 同步刷新 self.devices 中的数据
+            for info in self.devices:
+                if info.get('id') == device_id:
+                    info['mac_address'] = mac_address
+                    info['device_name'] = device_name
+                    info['system_type'] = system_type
+                    info['ota_version'] = ota_version
+                    info['main_version'] = main_version
+                    info['adb_status'] = '开启'
+                    break
+        except Exception as e:
+            print(f"[MainWindow] ADB 开启后刷新设备信息失败 {device_id}: {e}")
 
     def handle_error(self, error_msg, device_id, ip):
         """处理监控线程发送的错误信号"""
@@ -699,7 +283,142 @@ class MainWindow(BaseWindow):
         # 重新刷新设备列表
         self.refresh_device_list()
     
-    def start_monitor(self, delay_time, monitor_time, monitor_boot, monitor_start_count, capture_screenshot=False, screenshot_path="./screenshot"):
+    def _check_devices_first_time(self, selected_devices, monitor_service,
+                                   monitor_time, monitor_boot, monitor_start_count,
+                                   capture_screenshot, screenshot_path):
+        """首次检查选中设备：逐台检测在线状态、截图，收集失败列表"""
+        first_time_data = {}
+        online_count = 0
+        offline_count = 0
+        error_count = 0
+        screenshot_failed_devices = []
+        time_failed_devices = []
+        boot_failed_devices = []
+        start_count_failed_devices = []
+
+        for device_info in selected_devices:
+            device_id = device_info['id']
+            ip = device_info['ip']
+            password = device_info['password']
+
+            try:
+                errors = monitor_service.check_device_status(
+                    device_id, ip, password,
+                    monitor_time=monitor_time,
+                    monitor_boot=monitor_boot,
+                    monitor_start_count=monitor_start_count
+                )
+
+                if device_id in monitor_service.device_data:
+                    first_time_data[device_id] = monitor_service.device_data[device_id].copy()
+                    device_data = monitor_service.device_data[device_id]
+
+                    if monitor_time and ('initial_card_time' not in device_data or device_data.get('initial_card_time') == 'N/A'):
+                        time_failed_devices.append(device_id)
+                        self.log(f"设备 {device_id} ({ip}) 设备时间获取失败")
+
+                    if monitor_boot and ('initial_boot_time' not in device_data or device_data.get('initial_boot_time') == 'N/A'):
+                        boot_failed_devices.append(device_id)
+                        self.log(f"设备 {device_id} ({ip}) 启动时间获取失败")
+
+                    if monitor_start_count and ('initial_start_count' not in device_data or device_data.get('initial_start_count') == 'N/A'):
+                        start_count_failed_devices.append(device_id)
+                        self.log(f"设备 {device_id} ({ip}) 启动次数获取失败")
+
+                if errors:
+                    error_count += 1
+                    self.log(f"设备 {device_id} ({ip}) 存在错误: {len(errors)} 个")
+                else:
+                    online_count += 1
+                    time_diff = monitor_service.device_data.get(device_id, {}).get('initial_time_diff', 0)
+                    if abs(time_diff) > 3:
+                        self.log(f"设备 {device_id} ({ip}) 在线，但存在时间异常，时间差: {time_diff}s")
+                    else:
+                        self.log(f"设备 {device_id} ({ip}) 在线，状态正常")
+
+                if capture_screenshot:
+                    try:
+                        screenshot_result = monitor_service.capture_screenshot(
+                            device_id, ip, password, "Android", screenshot_path
+                        )
+                        if screenshot_result and (screenshot_result.startswith("设备") or "执行截图命令失败" in screenshot_result):
+                            screenshot_failed_devices.append(device_id)
+                            self.log(f"设备 {device_id} ({ip}) 截图失败: {screenshot_result}")
+                        else:
+                            self.log(f"设备 {device_id} ({ip}) 截图成功: {screenshot_result}")
+                    except Exception as e:
+                        screenshot_failed_devices.append(device_id)
+                        self.log(f"设备 {device_id} ({ip}) 截图时出错: {str(e)}")
+            except Exception as e:
+                offline_count += 1
+                self.log(f"设备 {device_id} ({ip}) 离线或无法连接: {str(e)}")
+
+        return (first_time_data, online_count, offline_count, error_count,
+                time_failed_devices, boot_failed_devices,
+                start_count_failed_devices, screenshot_failed_devices)
+
+    @staticmethod
+    def _build_monitor_summary(selected_devices, online_count, offline_count,
+                                error_count, first_time_data, dev_type,
+                                delay_time, monitor_time, monitor_boot,
+                                monitor_start_count, capture_screenshot,
+                                time_failed_devices, boot_failed_devices,
+                                start_count_failed_devices, screenshot_failed_devices):
+        """构建首次检测的监控摘要文本"""
+        time_error_count = 0
+        time_error_devices = []
+        time_error_details = []
+        for device_id, data in first_time_data.items():
+            time_diff = data.get('initial_time_diff', 0)
+            if abs(time_diff) > 3:
+                time_error_count += 1
+                time_error_devices.append(device_id)
+                time_error_details.append(f"{device_id} ({time_diff}秒)")
+
+        items = []
+        if monitor_time:
+            items.append('设备时间')
+        if monitor_boot:
+            items.append('启动时间')
+        if monitor_start_count:
+            items.append('启动次数')
+        if capture_screenshot:
+            items.append('截图')
+
+        summary = "监控摘要:\n"
+        summary += f"总设备数: {len(selected_devices)}\n"
+        summary += f"在线设备数: {online_count}\n"
+        summary += f"离线设备数: {offline_count}\n"
+        summary += f"存在错误的设备数: {error_count}\n"
+        summary += f"存在时间异常的设备数: {time_error_count}\n"
+        summary += f"监控类型: {dev_type}\n"
+        summary += f"查询间隔: {delay_time}秒\n"
+        summary += f"监控项目: {'、'.join(items)}\n"
+
+        if time_error_devices:
+            summary += f"时间异常设备: {', '.join(time_error_details)}\n"
+            summary += "时间异常处理: 以当前时间差为基准，后续监控只关注日均偏差是否大于±3s\n"
+
+        if time_failed_devices:
+            summary += f"设备时间获取失败设备: {', '.join(time_failed_devices)}\n"
+            summary += "设备时间获取失败处理: 后续监控将不对这些设备进行设备时间检测\n"
+
+        if boot_failed_devices:
+            summary += f"启动时间获取失败设备: {', '.join(boot_failed_devices)}\n"
+            summary += "启动时间获取失败处理: 后续监控将不对这些设备进行启动时间检测\n"
+
+        if start_count_failed_devices:
+            summary += f"启动次数获取失败设备: {', '.join(start_count_failed_devices)}\n"
+            summary += "启动次数获取失败处理: 后续监控将不对这些设备进行启动次数检测\n"
+
+        if screenshot_failed_devices:
+            summary += f"截图失败设备: {', '.join(screenshot_failed_devices)}\n"
+            summary += "截图失败处理: 后续监控将不对这些设备进行截图操作\n"
+
+        return summary
+
+    def start_monitor(self, delay_time, monitor_time, monitor_boot, monitor_start_count,
+                       capture_screenshot=False, screenshot_path="./screenshot"):
         """开始监控"""
         if len(self.device_list_view.get_devices()) == 0:
             self.log("请先刷新设备列表")
@@ -713,206 +432,90 @@ class MainWindow(BaseWindow):
         if self.monitor_thread and self.monitor_thread.isRunning():
             self.log("监控已经在运行中")
             return
-        
+
         # 第一次获取设备信息，检测设备在线情况和可执行性
         self.log("开始第一次获取设备信息，检测设备在线情况...")
-        
-        # 创建监控服务实例
+
         from business.device_monitor_service import DeviceMonitorService
         monitor_service = DeviceMonitorService(self.dev_type)
-        
-        # 存储第一次获取的设备信息
-        first_time_data = {}
-        online_count = 0
-        offline_count = 0
-        error_count = 0
-        
-        # 存储截图失败的设备
-        screenshot_failed_devices = []
-        
-        # 存储各项检测失败的设备
-        time_failed_devices = []
-        boot_failed_devices = []
-        start_count_failed_devices = []
-        
-        # 遍历所有选中的设备
-        for device_info in selected_devices:
-            device_id = device_info['id']
-            ip = device_info['ip']
-            password = device_info['password']
-            
-            try:
-                # 检查设备状态
-                errors = monitor_service.check_device_status(
-                    device_id, ip, password, 
-                    monitor_time=monitor_time, 
-                    monitor_boot=monitor_boot, 
-                    monitor_start_count=monitor_start_count
-                )
-                
-                # 保存第一次获取的数据
-                if device_id in monitor_service.device_data:
-                    first_time_data[device_id] = monitor_service.device_data[device_id].copy()
-                    
-                    # 检查各项数据是否获取成功
-                    device_data = monitor_service.device_data[device_id]
-                    
-                    # 检查设备时间获取情况
-                    if monitor_time and ('initial_card_time' not in device_data or device_data.get('initial_card_time') == 'N/A'):
-                        time_failed_devices.append(device_id)
-                        self.log(f"设备 {device_id} ({ip}) 设备时间获取失败")
-                    
-                    # 检查启动时间获取情况
-                    if monitor_boot and ('initial_boot_time' not in device_data or device_data.get('initial_boot_time') == 'N/A'):
-                        boot_failed_devices.append(device_id)
-                        self.log(f"设备 {device_id} ({ip}) 启动时间获取失败")
-                    
-                    # 检查启动次数获取情况
-                    if monitor_start_count and ('initial_start_count' not in device_data or device_data.get('initial_start_count') == 'N/A'):
-                        start_count_failed_devices.append(device_id)
-                        self.log(f"设备 {device_id} ({ip}) 启动次数获取失败")
-                
-                # 统计设备状态
-                if errors:
-                    error_count += 1
-                    self.log(f"设备 {device_id} ({ip}) 存在错误: {len(errors)} 个")
-                else:
-                    online_count += 1
-                    # 检查是否有时间异常（时间差大于±3s）
-                    time_diff = monitor_service.device_data.get(device_id, {}).get('initial_time_diff', 0)
-                    if abs(time_diff) > 3:
-                        self.log(f"设备 {device_id} ({ip}) 在线，但存在时间异常，时间差: {time_diff}s")
-                    else:
-                        self.log(f"设备 {device_id} ({ip}) 在线，状态正常")
-                
-                # 如果需要截图，尝试执行截图
-                if capture_screenshot:
-                    try:
-                        # 获取设备系统类型
-                        system_type = "Android"  # 简化处理，假设为Android系统
-                        screenshot_result = monitor_service.capture_screenshot(device_id, ip, password, system_type, screenshot_path)
-                        if screenshot_result and (screenshot_result.startswith("设备") or "执行截图命令失败" in screenshot_result):
-                            # 截图失败
-                            screenshot_failed_devices.append(device_id)
-                            self.log(f"设备 {device_id} ({ip}) 截图失败: {screenshot_result}")
-                        else:
-                            self.log(f"设备 {device_id} ({ip}) 截图成功: {screenshot_result}")
-                    except Exception as e:
-                        screenshot_failed_devices.append(device_id)
-                        self.log(f"设备 {device_id} ({ip}) 截图时出错: {str(e)}")
-            except Exception as e:
-                offline_count += 1
-                self.log(f"设备 {device_id} ({ip}) 离线或无法连接: {str(e)}")
-        
-        # 统计时间异常的设备数量和列表
-        time_error_count = 0
-        time_error_devices = []
-        time_error_details = []
-        for device_id, data in first_time_data.items():
-            time_diff = data.get('initial_time_diff', 0)
-            if abs(time_diff) > 3:
-                time_error_count += 1
-                time_error_devices.append(device_id)
-                time_error_details.append(f"{device_id} ({time_diff}秒)")
-        
+
+        (first_time_data, online_count, offline_count, error_count,
+         time_failed_devices, boot_failed_devices,
+         start_count_failed_devices, screenshot_failed_devices
+         ) = self._check_devices_first_time(
+            selected_devices, monitor_service,
+            monitor_time, monitor_boot, monitor_start_count,
+            capture_screenshot, screenshot_path
+        )
+
         # 生成监控摘要
-        summary = f"监控摘要:\n"
-        summary += f"总设备数: {len(selected_devices)}\n"
-        summary += f"在线设备数: {online_count}\n"
-        summary += f"离线设备数: {offline_count}\n"
-        summary += f"存在错误的设备数: {error_count}\n"
-        summary += f"存在时间异常的设备数: {time_error_count}\n"
-        summary += f"监控类型: {self.dev_type}\n"
-        summary += f"查询间隔: {delay_time}秒\n"
-        summary += f"监控项目: {'设备时间' if monitor_time else ''}{'、启动时间' if monitor_boot else ''}{'、启动次数' if monitor_start_count else ''}{'、截图' if capture_screenshot else ''}\n"
-        
-        # 如果有时间差较大的设备，列举设备名称和偏差值并提示时间异常处理
-        if time_error_devices:
-            summary += f"时间异常设备: {', '.join(time_error_details)}\n"
-            summary += f"时间异常处理: 以当前时间差为基准，后续监控只关注日均偏差是否大于±3s\n"
-        
-        # 如果有设备时间获取失败的设备，列举设备名称
-        if time_failed_devices:
-            summary += f"设备时间获取失败设备: {', '.join(time_failed_devices)}\n"
-            summary += f"设备时间获取失败处理: 后续监控将不对这些设备进行设备时间检测\n"
-        
-        # 如果有启动时间获取失败的设备，列举设备名称
-        if boot_failed_devices:
-            summary += f"启动时间获取失败设备: {', '.join(boot_failed_devices)}\n"
-            summary += f"启动时间获取失败处理: 后续监控将不对这些设备进行启动时间检测\n"
-        
-        # 如果有启动次数获取失败的设备，列举设备名称
-        if start_count_failed_devices:
-            summary += f"启动次数获取失败设备: {', '.join(start_count_failed_devices)}\n"
-            summary += f"启动次数获取失败处理: 后续监控将不对这些设备进行启动次数检测\n"
-        
-        # 如果有截图失败的设备，列举设备名称
-        if screenshot_failed_devices:
-            summary += f"截图失败设备: {', '.join(screenshot_failed_devices)}\n"
-            summary += f"截图失败处理: 后续监控将不对这些设备进行截图操作\n"
-        
+        summary = self._build_monitor_summary(
+            selected_devices, online_count, offline_count, error_count,
+            first_time_data, self.dev_type, delay_time,
+            monitor_time, monitor_boot, monitor_start_count,
+            capture_screenshot,
+            time_failed_devices, boot_failed_devices,
+            start_count_failed_devices, screenshot_failed_devices
+        )
         self.log(summary)
-        
+
         # 弹窗确认
         reply = QMessageBox.question(
-            self, 
-            "监控确认", 
+            self, "监控确认",
             f"{summary}\n\n是否开始正式监控？",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
-        
         if reply == QMessageBox.No:
             self.log("监控已取消")
             return
-        
+
         # 开始正式监控
         self.log("开始正式监控任务...")
-        
-        # 创建监控线程
-        self.monitor_thread = MonitorThread(
-            self.dev_type, 
-            delay_time, 
-            selected_devices, 
-            monitor_time, 
-            monitor_boot, 
-            monitor_start_count, 
-            capture_screenshot, 
-            first_time_data,  # 传递第一次获取的数据作为基准
-            screenshot_path,  # 传递截图存储路径
-            screenshot_failed_devices,  # 传递截图失败的设备列表
-            time_failed_devices,  # 传递设备时间获取失败的设备列表
-            boot_failed_devices,  # 传递启动时间获取失败的设备列表
-            start_count_failed_devices  # 传递启动次数获取失败的设备列表
+        self._launch_monitor(delay_time, monitor_time, monitor_boot,
+                              monitor_start_count, capture_screenshot,
+                              screenshot_path, selected_devices,
+                              first_time_data, screenshot_failed_devices,
+                              time_failed_devices, boot_failed_devices,
+                              start_count_failed_devices)
+
+    def _launch_monitor(self, delay_time, monitor_time, monitor_boot,
+                         monitor_start_count, capture_screenshot,
+                         screenshot_path, selected_devices,
+                         first_time_data, screenshot_failed_devices,
+                         time_failed_devices, boot_failed_devices,
+                         start_count_failed_devices):
+        """创建 MonitorConfig 并启动监控线程"""
+        from data_models import MonitorConfig
+        monitor_config = MonitorConfig(
+            dev_type=self.dev_type,
+            delay_time=delay_time,
+            monitor_time=monitor_time,
+            monitor_boot=monitor_boot,
+            monitor_start_count=monitor_start_count,
+            capture_screenshot=capture_screenshot,
+            screenshot_path=screenshot_path,
+            selected_devices=selected_devices,
+            first_time_data=first_time_data,
+            screenshot_failed_devices=screenshot_failed_devices,
+            time_failed_devices=time_failed_devices,
+            boot_failed_devices=boot_failed_devices,
+            start_count_failed_devices=start_count_failed_devices,
         )
-        
-        # 连接信号
+        self.monitor_thread = MonitorThread(monitor_config)
+
         self.monitor_thread.update_signal.connect(self.log)
         self.monitor_thread.device_list_signal.connect(self.on_device_list_updated)
         self.monitor_thread.status_signal.connect(self.update_status_bar)
         self.monitor_thread.error_signal.connect(self.handle_error)
         self.monitor_thread.monitor_result_signal.connect(self.on_monitor_result)
-        
-        # 启动线程
+
         self.monitor_thread.start()
-        
-        # 更新控制面板状态
         self.control_panel.set_monitor_status(True)
-        
-        # 暂停自动刷新
-        # self.auto_refresh_timer.stop()
-        
-        # 记录开始监控的日志
-        if self.dev_type == 'A-B-C-D-H':
-            if capture_screenshot:
-                self.log(f"开始监控所有类型的设备，查询间隔为 {delay_time} 秒，同时获取运行画面")
-            else:
-                self.log(f"开始监控所有类型的设备，查询间隔为 {delay_time} 秒")
-        else:
-            if capture_screenshot:
-                self.log(f"开始监控 {self.dev_type} 类型设备，查询间隔为 {delay_time} 秒，同时获取运行画面")
-            else:
-                self.log(f"开始监控 {self.dev_type} 类型设备，查询间隔为 {delay_time} 秒")
+
+        suffix = "，同时获取运行画面" if capture_screenshot else ""
+        type_name = "所有类型的设备" if self.dev_type == 'A-B-C-D-H' else f"{self.dev_type} 类型设备"
+        self.log(f"开始监控{type_name}，查询间隔为 {delay_time} 秒{suffix}")
     
     def stop_monitor(self):
         """停止监控"""
@@ -920,13 +523,31 @@ class MainWindow(BaseWindow):
             if self.monitor_thread:
                 if self.monitor_thread.isRunning():
                     self.monitor_thread.stop()
+                # 断开信号连接，防止重复连接
+                try:
+                    self.monitor_thread.update_signal.disconnect(self.log)
+                except TypeError:
+                    pass
+                try:
+                    self.monitor_thread.device_list_signal.disconnect(self.on_device_list_updated)
+                except TypeError:
+                    pass
+                try:
+                    self.monitor_thread.status_signal.disconnect(self.update_status_bar)
+                except TypeError:
+                    pass
+                try:
+                    self.monitor_thread.error_signal.disconnect(self.handle_error)
+                except TypeError:
+                    pass
+                try:
+                    self.monitor_thread.monitor_result_signal.disconnect(self.on_monitor_result)
+                except TypeError:
+                    pass
                 self.monitor_thread = None
                 
                 # 更新控制面板状态
                 self.control_panel.set_monitor_status(False)
-                
-                # 恢复自动刷新
-                # self.auto_refresh_timer.start()
                 
                 self.log("监控已停止")
         except Exception as e:
@@ -1057,7 +678,7 @@ class MainWindow(BaseWindow):
             self.log("请先选择要查询的设备")
             return
         
-        # 停止所有正在运行的查询线程
+        # 清理可能遗留的查询线程（向后兼容；当前使用 SerialQueryManager）
         for thread in self.query_threads:
             if thread.isRunning():
                 thread.quit()
@@ -1135,6 +756,7 @@ class MainWindow(BaseWindow):
         self.serial_manager.result_signal.connect(self.on_query_result)
         self.serial_manager.error_signal.connect(self.on_query_error)
         self.serial_manager.finished_signal.connect(self.close_csv_file)
+        self.serial_manager.state_signal.connect(self.on_query_state)
         self.serial_manager.start()
         
         # 判断是查询还是操作
@@ -1143,6 +765,32 @@ class MainWindow(BaseWindow):
         else:
             self.log(f"\n-----------------------------------------------------------------------\n开始执行 {self.getdevice_num} 台设备的{self.get_query_type_text(query_type)}操作")
     
+    def on_query_state(self, device_id, state):
+        """接收 SerialQueryManager 的状态信号，更新 ADB 列或刷新设备信息"""
+        if not device_id:
+            return
+        if state.startswith("ADB:"):
+            status = state.split(":", 1)[1]
+            self.device_list_view.update_device_info_field(device_id, 'adb_status', status)
+            for info in self.devices:
+                if info.get('id') == device_id:
+                    info['adb_status'] = status
+                    break
+        elif state.startswith("INFO_REFRESH:"):
+            try:
+                import ast
+                info_str = state.split(":", 1)[1]
+                info = ast.literal_eval(info_str)
+                if isinstance(info, dict):
+                    for field, value in info.items():
+                        self.device_list_view.update_device_info_field(device_id, field, value)
+                    for info_item in self.devices:
+                        if info_item.get('id') == device_id:
+                            info_item.update(info)
+                            break
+            except Exception as e:
+                print(f"[MainWindow] 解析 INFO_REFRESH 失败: {e}")
+
     def _is_query_operation(self, query_type):
         """判断是否是查询操作"""
         query_types = ["all", "time", "boot_time", "start_count", "sum_switch"]
@@ -1599,7 +1247,7 @@ class MainWindow(BaseWindow):
             self.find_dev_Thread.stop()
             self.find_dev_Thread.wait()
         
-        # self.auto_refresh_timer.stop()  # 停止自动刷新定时器
+        # 清理可能遗留的查询线程（向后兼容）
         for thread in self.query_threads:
             if thread.isRunning():
                 thread.quit()

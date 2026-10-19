@@ -108,7 +108,8 @@ class ResultDisplayView(QWidget):
         if not os.path.exists("./result_log"):
             os.mkdir("./result_log")
         path = f"./result_log/result_{log_out_time}.log"
-        open( path, "a", encoding="utf-8").write(self.log_text.toPlainText())
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(self.log_text.toPlainText())
         # 统一使用正斜杠
         path = path.replace('\\', '/')
         QMessageBox.information(None, '提示', f'日志导出成功\n导出位置：{path}',QMessageBox.Ok)
