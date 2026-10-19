@@ -18,11 +18,15 @@ from .result_display_view import ResultDisplayView
 from .monitor_thread import MonitorThread
 from .serial_query_manager import SerialQueryManager
 from .workers.adb_enable_worker import EnableAdbWorker
+from .workers.background_discovery_worker import BackgroundDiscovery
 
 from service.tool_service import ToolService
 from service.file_service import FileService
 from service.logging_service import get_logger
-from config import get_base_dir, supported_dev_types, tool_path, program_path
+from config import (
+    get_base_dir, supported_dev_types, tool_path, program_path,
+    BACKGROUND_DISCOVERY_ENABLED,
+)
 from .dialogs import CountInitConfirmDialog, UpgradeConfirmDialog
 
 logger = get_logger(__name__)
@@ -46,6 +50,7 @@ class MainWindow(BaseWindow):
         self.query_presenter = QueryResultPresenter(self.log, self.format_time_to_minute)
         self.refresh_controller = DeviceRefreshController(self)
         self.enable_adb_worker = None
+        self.background_discovery = BackgroundDiscovery(self)
         
         # 启动时最大化窗口
         self.showMaximized()
@@ -116,6 +121,9 @@ class MainWindow(BaseWindow):
         self.refresh_controller.device_found.connect(self.on_device_found)
         self.refresh_controller.failed.connect(self.on_refresh_failed)
         self.refresh_controller.finished.connect(self.on_refresh_finished)
+
+        # 后台心跳找卡：仅在设备上下线时通知（监控未运行时才跑）
+        self.background_discovery.changed.connect(self.on_background_devices_changed)
 
     def refresh_android_device_info_after_adb(self, device_id, ip, password):
         """
@@ -390,6 +398,8 @@ class MainWindow(BaseWindow):
 
         # 开始正式监控
         self.log("开始正式监控任务...")
+        # 监控运行期间不需要后台心跳（避免与监控取数竞争）
+        self.background_discovery.stop()
         self._launch_monitor(delay_time, monitor_time, monitor_boot,
                               monitor_start_count, capture_screenshot,
                               screenshot_path, selected_devices,
@@ -473,6 +483,9 @@ class MainWindow(BaseWindow):
             # 无论如何都要确保按钮状态正确
             self.control_panel.set_monitor_status(False)
             self.monitor_thread = None
+
+        # 监控停止后恢复后台心跳找卡（监控未运行期间保持设备上下线感知）
+        self._sync_background_discovery()
     
     def on_device_list_updated(self, devices):
         """设备列表更新时的处理"""
@@ -863,6 +876,7 @@ class MainWindow(BaseWindow):
         
         self.stop_monitor()
         self.refresh_controller.stop()
+        self.background_discovery.stop()
         if self.enable_adb_worker and self.enable_adb_worker.isRunning():
             self.enable_adb_worker.stop()
             self.enable_adb_worker.wait()
@@ -872,6 +886,8 @@ class MainWindow(BaseWindow):
         """刷新设备列表 - 通过控制器异步执行，避免阻塞主线程"""
         try:
             self.control_panel.refresh_button.setDisabled(True)
+            # 暂停后台心跳：避免与本次扫描的探测包相互干扰
+            self.background_discovery.stop()
             self.devices = []
             self._discovered_count = 0
             self.refresh_controller.refresh(self.control_panel.dev_type)
@@ -883,6 +899,8 @@ class MainWindow(BaseWindow):
         """手动找卡 - 按输入的 IP/区间/CIDR 定向扫描（广播兜底），异步执行。"""
         try:
             self.control_panel.refresh_button.setDisabled(True)
+            # 暂停后台心跳：避免与本次扫描的探测包相互干扰
+            self.background_discovery.stop()
             self.devices = []
             self._discovered_count = 0
             self.refresh_controller.refresh(self.control_panel.dev_type, targets)
@@ -944,6 +962,35 @@ class MainWindow(BaseWindow):
         self.update_device_list(devices)
         self.control_panel.update_refresh_status(f"当前设备数: {len(devices)}")
         self.log(f"设备列表已刷新，共 {len(devices)} 台设备")
+        # 以最新设备集合为基线，避免后台心跳把全部设备误报为「上线」
+        self.background_discovery.seed([(d['id'], d['ip']) for d in devices])
+        self._sync_background_discovery()
+
+    def _sync_background_discovery(self):
+        """按「监控是否运行」决定后台心跳的启停（监控运行时不跑）。"""
+        monitoring = bool(self.monitor_thread and self.monitor_thread.isRunning())
+        if BACKGROUND_DISCOVERY_ENABLED and not monitoring and self.devices:
+            self.background_discovery.start()
+        else:
+            self.background_discovery.stop()
+
+    def on_background_devices_changed(self, added, removed):
+        """后台心跳发现设备上线/下线：**仅在有变化时**刷新一次表格。
+
+        无变化时后台心跳不会发信号，因此不会产生多余的表格刷新与卡顿。
+        """
+        parts = []
+        if added:
+            parts.append("上线 " + ", ".join(f"{dev}({ip})" for dev, ip in added))
+        if removed:
+            parts.append("下线 " + ", ".join(f"{dev}({ip})" for dev, ip in removed))
+        self.log("后台心跳检测到设备变化 - " + "；".join(parts))
+        self.control_panel.update_refresh_status(
+            f"设备变化（+{len(added)}/-{len(removed)}），正在刷新...")
+
+        # 已在刷新中则跳过，避免重复的扫描与表格重建
+        if not self.refresh_controller.is_busy():
+            self.refresh_device_list()
 
     def on_refresh_failed(self, error_msg):
         """设备查找失败回调。"""

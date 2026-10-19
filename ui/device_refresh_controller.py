@@ -68,6 +68,11 @@ class DeviceRefreshController(QObject):
             self._thread.wait()
         self._thread = None
 
+    def is_busy(self) -> bool:
+        """当前是否有找卡/补全信息在进行中（用于避免重复触发刷新）。"""
+        thread_running = self._thread is not None and self._thread.isRunning()
+        return bool(thread_running or self._manager is not None)
+
     def _stop_manager(self) -> None:
         if not self._manager:
             return

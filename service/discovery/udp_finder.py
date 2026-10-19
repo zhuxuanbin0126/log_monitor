@@ -282,3 +282,53 @@ def scan_devices(timeout: float = UDP_SCAN_TIMEOUT, port: int = UDP_DISCOVERY_PO
                 pass
 
     return list(discovered.values())
+
+
+def probe_presence(duration: float = 2.0, port: int = UDP_DISCOVERY_PORT,
+                   probe_interval: float = UDP_PROBE_INTERVAL,
+                   on_device: Optional[Callable[[str, str], None]] = None,
+                   should_stop: Optional[Callable[[], bool]] = None,
+                   ) -> List[Tuple[str, str]]:
+    """有界的「在场探测」：``duration`` 秒内周期重发探测包并收集应答。
+
+    与 :func:`scan_devices` 的关键区别：本函数**不做发现即收尾**——即使一台设备
+    都没应答，也只在 ``duration`` 秒后结束。因此**单轮总时长可控**，适合做后台心跳
+    （周期短且稳定，不会因为「一台都没发现」而白等整个扫描超时）。
+
+    Args:
+        duration: 单轮探测时长（秒）
+        port: 设备 UDP 端口
+        probe_interval: 探测包重发间隔（秒）
+        on_device: 可选回调 ``f(device_id, ip)``，每发现一台新设备调用一次
+        should_stop: 可选回调，返回 True 时提前终止（用于停止后台心跳）
+
+    Returns:
+        ``[(device_id, ip_address), ...]``（按设备 ID 去重）
+    """
+    sockets = open_probe_sockets()
+    discovered: Dict[str, Tuple[str, str]] = {}
+    start_time = time.monotonic()
+    try:
+        next_probe = start_time  # 立即发第一轮
+        while True:
+            if should_stop is not None and should_stop():
+                break
+            now = time.monotonic()
+            elapsed = now - start_time
+            if elapsed >= duration:
+                break
+            if now >= next_probe:
+                send_probe_round(sockets, port)
+                next_probe = now + probe_interval
+            readable, _, _ = select.select(
+                sockets, [], [], min(probe_interval, max(0.05, duration - elapsed)))
+            for sock in readable:
+                _drain_socket(sock, discovered, on_device)
+    finally:
+        for sock in sockets:
+            try:
+                sock.close()
+            except OSError:
+                pass
+    return list(discovered.values())
+
