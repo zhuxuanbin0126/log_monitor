@@ -19,6 +19,7 @@ from data_models import DeviceState, OperationResult
 from service.logging_service import get_logger
 from service.protocol import get_device_status
 from service.protocol.command_query import exec_if_supported
+from service.protocol.set_time import set_time as protocol_set_time
 from service.protocol.query_service import (
     build_device_time_info, build_uptime_info, parse_device_datetime, BEIJING_TZ,
 )
@@ -183,9 +184,24 @@ class DeviceMonitorService:
         """导出开关机日志"""
         return DeviceLogService.switch_log_output(ip, password, device_id, system_type, path)
     def ntptime_checkout_time(self, ip, password, device_id, system_type):
+        """设置设备时间（协议 Set Time 优先，失败回落 ntpdate 推送）。
+
+        协议校时的 ``dateTime`` 为 **UTC-0** 墙钟（见 ``service/protocol/set_time``），
+        时区由 ``timeZone`` 声明为北京时间；因此免推 ntpdate、免 SSH，也不依赖
+        设备能否访问外网 NTP。
         """
-        设置设备时间
-        """
+        # ---- 协议优先：Set Time（免 adb/SSH、免外网） ----
+        if USE_PROTOCOL_QUERY:
+            try:
+                ok, msg = protocol_set_time(ip)
+            except Exception as exc:  # pylint: disable=broad-except
+                ok, msg = False, str(exc)
+            if ok:
+                local_now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                return OperationResult(
+                    True, data=f"{device_id} 时间已校时成功（协议），本机时间为：{local_now}")
+            logger.info("设备 %s 协议校时不可用（%s），回落 ntpdate 推送", device_id, msg)
+
         try:
             remote_file = ""
             if ToolService.is_android_device(device_id):

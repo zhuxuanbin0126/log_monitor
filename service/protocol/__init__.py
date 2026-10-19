@@ -39,6 +39,9 @@ from .set_query import (
     disable_wireless_adb, enable_all_adb, enable_wired_adb, enable_wireless_adb,
     set_development,
 )
+from .set_time import (
+    BEIJING_TIME_ZONE, DEFAULT_NTP_HOSTS, build_time_message, set_time,
+)
 
 __all__ = [
     'DEFAULT_VERSION', 'build_envelope', 'new_uuid',
@@ -53,5 +56,6 @@ __all__ = [
     'FileDownload', 'FileDownloadState', 'receive_file',
     'READBACK_TARGET_SCREENSHOT', 'SCREENSHOT_FILE_OPTIONS', 'FILE_TRANSFER_MODE_SOCKET',
     'build_readback_message', 'query_screenshot', 'screenshot_supported',
+    'set_time', 'build_time_message', 'BEIJING_TIME_ZONE', 'DEFAULT_NTP_HOSTS',
 ]
 

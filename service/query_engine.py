@@ -30,6 +30,7 @@
 """
 
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -142,8 +143,11 @@ def query_all(monitor_service, device_id: str, ip: str, password: str,
         ``switch_time`` / ``network_time`` 供调用方写开关机 CSV。
     """
     outcome = AllQueryOutcome()
+    started = time.monotonic()
 
     # ---- 阶段一：设备时间 + 运行时长 / 启动时间（协议一次 Get，内部缓存） ----
+    logger.info("[查询全部] %s 阶段一：取设备时间与运行时长（协议一次 Get）", device_id)
+    phase1 = time.monotonic()
     formatted_remote_time, time_diff = monitor_service.get_device_time_info(
         ip, password, device_id)
     outcome.results["device_time"] = {
@@ -151,6 +155,13 @@ def query_all(monitor_service, device_id: str, ip: str, password: str,
         "time_diff": time_diff,
     }
     outcome.results["boot_time"] = monitor_service.get_uptime_info(ip, password, device_id)
+    boot_info = outcome.results["boot_time"]
+    logger.info(
+        "[查询全部] %s 阶段一完成（%.2fs）：设备时间=%s 时间差=%ss 运行时长=%s 启动时间=%s",
+        device_id, time.monotonic() - phase1, formatted_remote_time, time_diff,
+        boot_info.get("formatted_uptime", "N/A") if isinstance(boot_info, dict) else "N/A",
+        boot_info.get("boot_time", "N/A") if isinstance(boot_info, dict) else "N/A",
+    )
 
     # ---- 阶段二：三项计数（协议一次批量 exec，缺失项逐项降级） ----
     path = get_device_remote_path(system_type)
@@ -161,6 +172,8 @@ def query_all(monitor_service, device_id: str, ip: str, password: str,
     want_start_count = dev_type_prefix not in NO_START_COUNT_TYPES
     start_cmd = START_COUNT_CMD if want_start_count else ""
 
+    logger.info("[查询全部] %s 阶段二：批量取 启动次数/开关机次数/网络开关机次数", device_id)
+    phase2 = time.monotonic()
     counts = query_counts_batched(
         ip, switch_path, network_path, start_count_cmd=start_cmd)
     if counts is not None:
@@ -172,6 +185,7 @@ def query_all(monitor_service, device_id: str, ip: str, password: str,
         start_count = counts.get("start_count")
         if start_count is None:
             # 该设备不支持启动次数查询，或批量通道没拿到 → 单项降级
+            logger.info("[查询全部] %s 启动次数协议未取到，单项降级 adb/SSH", device_id)
             start_count = monitor_service.get_start_count(ip, password, device_id)
         outcome.results["start_count"] = start_count
     else:
@@ -181,6 +195,7 @@ def query_all(monitor_service, device_id: str, ip: str, password: str,
     switch_time = counts.get("switch_count")
     network_time = counts.get("network_count")
     if switch_time is None and network_time is None:
+        logger.info("[查询全部] %s 开关机次数协议未取到，降级 adb/SSH", device_id)
         switch_time, network_time, success, error = monitor_service.sum_switch_count(
             ip, password, device_id, path)
         outcome.switch_time = switch_time
@@ -188,6 +203,8 @@ def query_all(monitor_service, device_id: str, ip: str, password: str,
         outcome.switch_success = success
         if not success:
             outcome.results["sum_switch"] = error
+            logger.warning("[查询全部] %s 阶段二失败（%.2fs）：%s",
+                           device_id, time.monotonic() - phase2, error)
             return outcome
     else:
         switch_time = switch_time or 0
@@ -199,5 +216,12 @@ def query_all(monitor_service, device_id: str, ip: str, password: str,
     outcome.results["sum_switch"] = (
         f"{device_id} 当前开关机次数为：{outcome.switch_time} "
         f"网络开关机次数为：{outcome.network_time}"
+    )
+    logger.info(
+        "[查询全部] %s 完成（阶段二 %.2fs，合计 %.2fs，批量通道=%s）："
+        "启动次数=%s 开关机次数=%s 网络开关机次数=%s",
+        device_id, time.monotonic() - phase2, time.monotonic() - started,
+        "协议" if outcome.protocol_used else "adb/SSH",
+        outcome.results.get("start_count"), outcome.switch_time, outcome.network_time,
     )
     return outcome
