@@ -113,32 +113,19 @@ def parse_ip_spec(spec, max_targets: Optional[int] = PROBE_MAX_TARGETS) -> List[
 
 
 def local_subnets() -> List[ipaddress.IPv4Network]:
-    """本机所有非回环 IPv4 子网（含掩码），用于判断目标 IP 是否与本机同网段。
+    """本机所有非回环 IPv4 子网，用于判断目标 IP 是否与本机同网段。
 
     同网段的目标 IP 由广播发现覆盖（O(1) 轮次，一次探测包直达网段内所有设备），
     无需逐 IP 单播 —— 这正是"手动找卡"高效的关键。
 
-    优先 psutil 取真实掩码；不可用时按 /24 估算（生产环境常见配置）。
+    以本机网卡地址按 /24 估算掩码（生产环境常见配置，且不引入额外依赖）。
     """
     nets: List[ipaddress.IPv4Network] = []
-    try:
-        import psutil  # type: ignore  # pylint: disable=import-outside-toplevel
-        for _name, addrs in psutil.net_if_addrs().items():
-            for addr in addrs:
-                if addr.family == socket.AF_INET and not addr.address.startswith("127."):
-                    try:
-                        nets.append(ipaddress.ip_network(
-                            f"{addr.address}/{addr.netmask}", strict=False))
-                    except ValueError:
-                        pass
-    except Exception:  # pylint: disable=broad-except
-        pass
-    if not nets:
-        for ip in local_ipv4_addresses():
-            try:
-                nets.append(ipaddress.ip_network(f"{ip}/24", strict=False))
-            except ValueError:
-                pass
+    for ip in local_ipv4_addresses():
+        try:
+            nets.append(ipaddress.ip_network(f"{ip}/24", strict=False))
+        except ValueError:
+            pass
     return nets
 
 

@@ -58,28 +58,32 @@ _DEVICE_ID_CHARS = frozenset(
 _MIN_DEVICE_ID_LENGTH = 8
 
 
+def _primary_ipv4_address() -> Optional[str]:
+    """本机默认出口 IPv4 地址（UDP connect 不真正发包，仅查路由表）。"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
 def local_ipv4_addresses() -> List[str]:
     """本机所有非回环 IPv4 地址（逐网卡绑定源 IP 用）。
 
-    优先 psutil（可选依赖，可完整枚举网卡）；不可用时回退主机名解析
-    （Windows 下也能拿到多块网卡的地址）。
+    以主机名解析枚举网卡地址，并补充默认出口地址兜底（主机名解析失败时仍能
+    拿到至少一块网卡的地址）。
     """
-    ips: List[str] = []
     try:
-        import psutil  # type: ignore  # pylint: disable=import-outside-toplevel
-        for _name, addrs in psutil.net_if_addrs().items():
-            for addr in addrs:
-                if (addr.family == socket.AF_INET
-                        and not addr.address.startswith("127.")):
-                    ips.append(addr.address)
-    except Exception:  # pylint: disable=broad-except
-        pass
-    if not ips:
-        try:
-            ips = [ip for ip in socket.gethostbyname_ex(socket.gethostname())[2]
-                   if not ip.startswith("127.")]
-        except OSError:
-            ips = []
+        ips = [ip for ip in socket.gethostbyname_ex(socket.gethostname())[2]
+               if not ip.startswith("127.")]
+    except OSError:
+        ips = []
+    primary = _primary_ipv4_address()
+    if primary and primary not in ips:
+        ips.append(primary)
     return list(dict.fromkeys(ips))
 
 
