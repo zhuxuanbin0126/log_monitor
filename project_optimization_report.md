@@ -285,9 +285,9 @@ sequenceDiagram
   - [device_checker.py](file:///d:/log_monitor/20260224/device_checker.py#L606-L695) `check_device_by_metrics` 使用 lambda 字典但签名不一致
 - **优化步骤**：
   1. 使用卫语句提前返回，避免深层 `if` 嵌套。
-  2. 对查询类型使用策略模式或统一签名的分发字典：`QUERY_HANDLERS[query_type](device)`。
+  2. 对任务类型使用策略模式或统一签名的分发字典：`QUERY_HANDLERS[query_type](device)`。
   3. 对系统类型路径判断统一封装为 `get_switch_log_path(system_type)`、`get_program_path(system_type)`。
-- **预期效果**：逻辑扁平化，新增查询类型只需注册 handler。
+- **预期效果**：逻辑扁平化，新增任务类型只需注册 handler。
 - **潜在风险**：lambda/函数引用不一致问题需统一参数列表。
 - **兼容性/可维护性**：保持行为不变，仅调整实现方式。
 
@@ -437,7 +437,7 @@ sequenceDiagram
 - **潜在风险**：低。
 - **兼容性/可维护性**：用户交互体验改善。
 
-#### 4.4.5 查询类型字符串参数应使用枚举
+#### 4.4.5 任务类型字符串参数应使用枚举
 
 - **问题位置**：[ui/control_panel.py](file:///d:/log_monitor/20260224/ui/control_panel.py#L117-L182) `create_query_control` 中多个 `lambda: self.query_selected_clicked.emit("...")`
 - **问题描述**：字符串参数分散，容易拼写错误。
@@ -790,7 +790,7 @@ sequenceDiagram
 | 方向 | 当前状态 | 改进建议 | 实施步骤 | 预期收益 |
 |------|----------|----------|----------|----------|
 | `MonitorThread._process_monitor_cycle` | 循环内设备逐个串行处理，无并发 | 引入线程池并行处理多设备监控 | 1) 使用 `concurrent.futures.ThreadPoolExecutor`；2) 每个设备发放独立任务；3) 使用 `Lock` 保护共享日志写入 | 多设备监控速度提升 N 倍（N = 设备数） |
-| `main_window.query_selected` | ~90 行长方法，混合了多种查询类型的预处理 | 拆分为 `_handle_count_init()`、`_handle_upgrade()` 等独立处理器 | 1) 提取各查询类型的预处理为独立方法；2) 主方法仅负责路由 | 代码可读性提升；易于新增查询类型 |
+| `main_window.query_selected` | ~90 行长方法，混合了多种任务类型的预处理 | 拆分为 `_handle_count_init()`、`_handle_upgrade()` 等独立处理器 | 1) 提取各任务类型的预处理为独立方法；2) 主方法仅负责路由 | 代码可读性提升；易于新增任务类型 |
 | `device_checker.py` 方法 | 每个 `check_*` 方法重复打印分隔线 | 提取 `@contextmanager _section(title)` 上下文管理器 | 1) 创建上下文管理器自动打印开始/结束分隔线；2) 每个 `check_*` 方法使用 `with self._section("xxx"):` 包裹 | 减少 ~60 行重复代码 |
 
 ### 3. 类结构
