@@ -6,7 +6,7 @@
 清理范围（scope，可多选）::
 
     monitor_data  监控基准数据：device_monitoring_data.json / device_error.txt / device_errors.txt / ./monitor_data
-    logs          运行日志：output/logs 下与型号匹配的 *_uptime/_cardtime/_startcount/_comprehensive.log
+    logs          运行日志：LOG_DIR 下与型号匹配的目录（**散落文件永不清理**，含 app.log）
     screenshot    截图：output/screenshot 与 ./screenshot 下匹配型号的设备目录
     switch_log    开关机日志：output/switch_log 与 ./switch_log 下匹配型号的设备目录 + 会话级 CSV
     excel         Excel 报表：output/excel 下 ``{型号}_*.xlsx``
@@ -133,17 +133,35 @@ def plan_monitor_data(_dev_type: str = "", _all_types: bool = False) -> List[Cle
     return items
 
 
+APP_LOG_PREFIX = "app.log"
+"""程序自身运行日志（轮转文件）。
+
+它被当前进程**持续占用**：删不掉（Windows 会报「文件正在被使用」），
+而且清理它等于抹掉本次排查线索 —— 因此「运行日志」范围**永不包含**它。
+"""
+
+
 def plan_logs(dev_type: str, include_all_types: bool = False) -> List[CleanItem]:
-    """运行日志：``LOG_DIR`` 下与型号前缀匹配的日志文件。"""
+    """运行日志：``LOG_DIR`` 下与型号匹配的**日志目录**。
+
+    **只清目录、不碰 ``LOG_DIR`` 下的散落文件**：
+    ``app.log`` 及其轮转副本被当前进程持续占用（Windows 报「文件正在被使用」），
+    删不掉也不该删；该目录下其它散落文件同样一律不列入、不清理。
+    型号日志目录（如 ``output/logs/H16_AgingTest/``）照常参与清理。
+    """
     regex = None if include_all_types else prefix_pattern(dev_type)
     if not os.path.isdir(LOG_DIR):
         return []
     items: List[CleanItem] = []
     for name in sorted(os.listdir(LOG_DIR)):
         full = os.path.join(LOG_DIR, name)
-        if not os.path.isfile(full) or not _matches(regex, name):
+        if name.lower().startswith(APP_LOG_PREFIX):
+            continue                      # 程序自身运行日志：永不清理
+        if not os.path.isdir(full):
+            continue                      # 该目录下的散落文件：不执行、不清理
+        if not _matches(regex, name):
             continue
-        items.append(CleanItem(SCOPE_LOGS, name, full, False, [full]))
+        items.append(CleanItem(SCOPE_LOGS, f"{name}/", full, True, _list_files(full)))
     return items
 
 

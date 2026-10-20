@@ -56,13 +56,41 @@ def test_plan_excel_ignores_non_xlsx(monkeypatch, tmp_path):
 
 def test_plan_logs_filters_by_dev_type(monkeypatch, tmp_path):
     log_dir = tmp_path / "logs"
-    log_dir.mkdir()
-    _touch(str(log_dir / "H16_AgingTest_uptime.log"))
-    _touch(str(log_dir / "C16L_AgingTest_uptime.log"))
+    (log_dir / "H16_AgingTest").mkdir(parents=True)
+    (log_dir / "C16L_AgingTest").mkdir()
+    _touch(str(log_dir / "H16_AgingTest" / "uptime.log"))
+    _touch(str(log_dir / "C16L_AgingTest" / "uptime.log"))
     monkeypatch.setattr(hc, "LOG_DIR", str(log_dir))
 
-    assert [item.label for item in hc.plan_logs("H16")] == ["H16_AgingTest_uptime.log"]
+    assert [item.label for item in hc.plan_logs("H16")] == ["H16_AgingTest/"]
     assert len(hc.plan_logs("H16", include_all_types=True)) == 2
+
+
+def test_plan_logs_never_includes_app_log(monkeypatch, tmp_path):
+    """app.log 被当前进程占用：即使「全部型号」也不得列入清理清单。"""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    _touch(str(log_dir / "app.log"))
+    _touch(str(log_dir / "app.log.1"))
+    _touch(str(log_dir / "H16_AgingTest_uptime.log"))
+    monkeypatch.setattr(hc, "LOG_DIR", str(log_dir))
+
+    # LOG_DIR 下的散落文件（含 app.log）一律不清理
+    assert hc.plan_logs("H16", include_all_types=True) == []
+
+
+def test_plan_logs_includes_matching_type_dirs(monkeypatch, tmp_path):
+    """型号日志目录（output/logs/<型号>_AgingTest）参与清理。"""
+    log_dir = tmp_path / "logs"
+    (log_dir / "H16_AgingTest").mkdir(parents=True)
+    _touch(str(log_dir / "H16_AgingTest" / "uptime.log"))
+    (log_dir / "Q910_AgingTest").mkdir()
+    _touch(str(log_dir / "Q910_AgingTest" / "uptime.log"))
+    monkeypatch.setattr(hc, "LOG_DIR", str(log_dir))
+
+    plan = hc.plan_logs("H16")
+    assert [item.label for item in plan] == ["H16_AgingTest/"]
+    assert plan[0].file_count == 1
 
 
 def test_plan_monitor_data_lists_existing_files(monkeypatch, tmp_path):
@@ -114,8 +142,8 @@ def test_build_plan_is_empty_for_no_scope():
 def test_build_plan_follows_all_scopes_order(monkeypatch, tmp_path):
     _isolate_legacy(monkeypatch, tmp_path)
     log_dir = tmp_path / "logs"
-    log_dir.mkdir()
-    _touch(str(log_dir / "H16_AgingTest_uptime.log"))
+    (log_dir / "H16_AgingTest").mkdir(parents=True)
+    _touch(str(log_dir / "H16_AgingTest" / "uptime.log"))
     excel_dir = tmp_path / "excel"
     excel_dir.mkdir()
     _touch(str(excel_dir / "H16_a.xlsx"))
