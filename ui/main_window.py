@@ -667,7 +667,7 @@ class MainWindow(BaseWindow):
             self.switch_log_file = open(f"./switch_log/{time.strftime('%Y%m%d%H%M%S',time.localtime())}_switch_log.csv", "w", encoding="utf-8")
             self.switch_log_file.write("设备ID,累计开机次数,累计网络开机次数\n")
         
-        # 保存查询类型用于汇总
+        # 保存任务类型用于汇总
         self.current_query_type = query_type
 
         self.getdevice_num = len(devices_to_process)
@@ -733,6 +733,10 @@ class MainWindow(BaseWindow):
         """接收 SerialQueryManager 的状态信号，更新 ADB 列或刷新设备信息"""
         if not device_id:
             return
+        if state == SerialQueryManager.STATE_OFFLINE:
+            self.log(f"设备 {device_id} 当前离线/不可达，本轮已跳过"
+                     f"（任务结束后会自动再试一次）", is_warning=True)
+            return
         if state.startswith("ADB:"):
             status = state.split(":", 1)[1]
             self.device_list_view.update_device_info_field(device_id, 'adb_status', status)
@@ -762,15 +766,22 @@ class MainWindow(BaseWindow):
                 self.switch_log_file.close()
             snapshot = GLOBAL_TASK.snapshot()
             remaining = snapshot.get('remaining') or []
+            offline = list(getattr(self.serial_manager, 'offline_devices', []) or [])
             elapsed = self._task_elapsed()
             duration_text = self._task_duration_text(elapsed)
-            if remaining:
+            if remaining and snapshot.get('stopped'):
                 # 被中断：明确告知完成了多少、还剩多少、怎么续跑
                 self.log(
                     f"任务已中断：完成 {snapshot['done']}/{snapshot['total']} 台，"
                     f"剩余 {len(remaining)} 台未执行，耗时 {duration_text} "
                     f"—— 可点击「继续执行上一个任务」从断点继续",
                     is_warning=True, stamp=True)
+            elif offline:
+                names = ", ".join(f"{item[0]}({item[1]})" for item in offline)
+                self.log(
+                    f"有 {len(offline)} 台设备离线未完成：{names}"
+                    f"（已自动补跑一次仍不可达）—— 设备恢复后可点击"
+                    f"「继续执行上一个任务」只补这些设备", is_warning=True, stamp=True)
             # 显示汇总信息（监控任务的查询和截图不显示汇总）
             if not (self.monitor_thread and self.monitor_thread.isRunning()):
                 self.query_presenter.show_summary(
@@ -780,14 +791,18 @@ class MainWindow(BaseWindow):
                     self.failed_devices,
                     self.not_applicable_devices,
                     elapsed=duration_text,
+                    offline=offline,
                 )
             self.control_panel.set_resume_available(bool(remaining), len(remaining))
-            self._set_task_status(
-                f"任务：已中断（{snapshot['done']}/{snapshot['total']}，"
-                f"剩余 {len(remaining)} 台，耗时 {elapsed}）" if remaining
-                else f"任务：已完成（{snapshot['total']} 台，耗时 {elapsed}）",
-                is_warning=bool(remaining),
-            )
+            if snapshot.get('stopped'):
+                status_text = (f"任务：已中断（{snapshot['done']}/{snapshot['total']}，"
+                               f"剩余 {len(remaining)} 台，耗时 {elapsed}）")
+            elif offline:
+                status_text = (f"任务：完成 {snapshot['done']}/{snapshot['total']}，"
+                               f"{len(offline)} 台离线未完成（耗时 {elapsed}）")
+            else:
+                status_text = f"任务：已完成（{snapshot['total']} 台，耗时 {elapsed}）"
+            self._set_task_status(status_text, is_warning=bool(remaining))
             self._task_started_at = None
             self._task_started_wall = None
             self.control_panel.set_task_running(self._other_tasks_running())

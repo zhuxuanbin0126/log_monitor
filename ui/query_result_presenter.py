@@ -111,17 +111,21 @@ class QueryResultPresenter:
             self._log(f"警告: 播放器启动次数异常，当前值为 {count}", is_warning=True)
 
     def show_summary(self, current_type, total, successful, failed,
-                     not_applicable=None, elapsed=None) -> None:
+                     not_applicable=None, elapsed=None, offline=None) -> None:
         """输出查询/操作汇总（「不适用」单独一行，不计入失败）。
 
         汇总头与耗时行带**系统时间**；``elapsed`` 为耗时文案
         （形如 ``25.3s（17:09:37 → 17:10:02）``），方便核对单次任务执行时长。
+        ``offline`` 为本轮因设备离线而未执行的 ``(id, ip, ...)`` 列表：
+        单独列一行，不计入失败，也不计入成功。
         """
         is_query = self.is_query_operation(current_type)
         op_text = self.query_type_text(current_type)
         success_count = len(successful)
         fail_count = len(failed)
         na_list = list(not_applicable or [])
+        offline_list = [item for item in (offline or [])
+                        if isinstance(item, (list, tuple)) and len(item) >= 2]
 
         self._log("\n-----------------------------------------------------------------------")
         if is_query:
@@ -136,6 +140,10 @@ class QueryResultPresenter:
             self._log(f"  查询失败: {fail_count} 台")
             if failed:
                 self._log(f"  失败设备: {', '.join(failed)}", is_error=True)
+            if offline_list:
+                names = ", ".join(f"{item[0]}({item[1]})" for item in offline_list)
+                self._log(f"  离线未完成: {len(offline_list)} 台 - {names}"
+                          f"（设备恢复后可「继续执行上一个任务」）", is_warning=True)
             if elapsed:
                 self._log(f"  本次耗时: {elapsed}", stamp=True)
         else:
@@ -144,4 +152,8 @@ class QueryResultPresenter:
             if fail_count > 0:
                 self._log(f"  操作失败: {fail_count} 台")
                 self._log(f"  失败设备: {', '.join(failed)}", is_error=True)
+            if offline_list:
+                names = ", ".join(f"{item[0]}({item[1]})" for item in offline_list)
+                self._log(f"  离线未完成: {len(offline_list)} 台 - {names}",
+                          is_warning=True)
         self._log("-----------------------------------------------------------------------")

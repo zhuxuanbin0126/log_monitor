@@ -143,11 +143,16 @@ class DeviceMonitorService:
                         steps.append(f"{local_file}推送成功 ({stdout})")
                         files_to_check.append(remote_path)
                         
-                        # Android设备：系统二进制文件需要设置执行权限
+                        # Android 系统二进制需要执行权限：走**统一命令通道**
+                        # （协议 exec 优先 → adb → SSH）。旧实现直接用 adb chmod，
+                        # adb 连接抖动时会误报 "device 'ip:5555' not found"，
+                        # 而设备其实已经收到文件、初始化也已经生效。
                         if is_android and remote_path.startswith("/system/bin/"):
-                            stdout_chmod, stderr_chmod, returncode_chmod = ToolService.adb_set_executable(ip, remote_path)
-                            if stderr_chmod or returncode_chmod != 0:
-                                error = f"设置{local_file}执行权限失败: {stderr_chmod}"
+                            _, stderr_chmod, rc_chmod = ToolService.execute_command(
+                                device_id, ip, password, f"chmod +x {remote_path}", ".")
+                            if rc_chmod != 0:
+                                error = (f"设置{local_file}执行权限失败: "
+                                         f"{stderr_chmod or '返回码 %s' % rc_chmod}")
                             else:
                                 steps.append(f"{local_file}执行权限设置完成")
             

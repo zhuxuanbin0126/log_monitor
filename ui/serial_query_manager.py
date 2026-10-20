@@ -1,4 +1,5 @@
 from PyQt5.QtCore import QThread, pyqtSignal
+import socket
 import threading
 
 from service.tool_service import ToolService
@@ -10,8 +11,8 @@ from service.logging_service import get_logger
 from service.protocol import get_device_status
 from service.task_control import GLOBAL_TASK
 from config import (
-    LEGACY_QUERY_MAX_WORKERS, LINUX_SSH_MAX_WORKERS, QUERY_MAX_WORKERS,
-    SCREENSHOT_MAX_WORKERS,
+    DEVICE_PROBE_TIMEOUT, LEGACY_QUERY_MAX_WORKERS, LINUX_SSH_MAX_WORKERS,
+    PROTOCOL_PORT, QUERY_MAX_WORKERS, SCREENSHOT_MAX_WORKERS,
 )
 from business.query_dispatcher import build_query_dispatch
 
@@ -86,6 +87,8 @@ class SerialQueryManager(QThread):
     STATE_QUERYING = "QUERYING"
     STATE_DONE = "DONE"
     STATE_ERROR = "ERROR"
+    STATE_OFFLINE = "OFFLINE"
+    """派发前 TCP 探测不可达（掉电/掉线）：本轮跳过，结束后补跑一次"""
 
     PROTOCOL_ONLY_TYPES = frozenset({
         "all", "time", "boot_time", "start_count", "sum_switch", "screenshot", "check_time",
@@ -110,6 +113,9 @@ class SerialQueryManager(QThread):
         self.is_running = True
         self._csv_lock = threading.Lock()
         self._current_device = ""
+        self.offline_devices = []
+        """本轮因 TCP 不可达（离线）被跳过的设备；任务结束后会再试一次，
+        仍不可达的会留在未完成清单里（可「继续执行上一个任务」）。"""
         
     def _set_state(self, state, device_id=None):
         """设置当前查询状态并发送信号"""
@@ -130,7 +136,7 @@ class SerialQueryManager(QThread):
             protocol_devices, legacy_devices = self._split_by_protocol(android_devices)
             ssh_limit = min(len(ssh_devices), LINUX_SSH_MAX_WORKERS) or 0
             logger.info(
-                "[任务管理器] 查询类型=%s，共 %s 台：协议池 %s 台（并发 %s）、"
+                "[任务管理器] 任务类型=%s，共 %s 台：协议池 %s 台（并发 %s）、"
                 "adb/SSH 池 %s 台（并发 %s）、Linux SSH 池 %s 台（并发 %s）",
                 self.query_type, total_devices, len(protocol_devices),
                 self._protocol_limit(len(protocol_devices)) or 0,
@@ -140,22 +146,37 @@ class SerialQueryManager(QThread):
             )
 
             # 协议池：每台设备独立 TCP，可安全高并发
+            processed = 0
             if protocol_devices:
-                self._process_parallel(protocol_devices, total_devices,
-                                       self._protocol_limit(len(protocol_devices)),
-                                       base=0)
+                processed += self._process_parallel(
+                    protocol_devices, total_devices,
+                    self._protocol_limit(len(protocol_devices)), base=processed)
 
             # legacy 池：走 adb/SSH，adb server 单进程，低并发避免相互干扰
             if legacy_devices:
-                self._process_parallel(legacy_devices, total_devices,
-                                       min(len(legacy_devices), LEGACY_QUERY_MAX_WORKERS),
-                                       base=len(protocol_devices))
+                processed += self._process_parallel(
+                    legacy_devices, total_devices,
+                    min(len(legacy_devices), LEGACY_QUERY_MAX_WORKERS),
+                    base=processed)
 
             # Linux 设备：SSH 并发（每台一条独立连接，小并发即够且互不干扰）
             if ssh_devices:
+                processed += self._process_parallel(
+                    ssh_devices, total_devices, ssh_limit, base=processed)
+
+            # 离线补跑：任务期间掉线（断电/网线松动）又在结束时恢复的设备再试一次
+            if self.offline_devices and not self._should_stop():
+                retry = list(self.offline_devices)
+                self.offline_devices = []
+                logger.info("[任务管理器] 对 %s 台离线设备再试一次", len(retry))
                 self._process_parallel(
-                    ssh_devices, total_devices, ssh_limit,
-                    base=len(protocol_devices) + len(legacy_devices))
+                    retry, total_devices, min(len(retry), QUERY_MAX_WORKERS),
+                    base=processed, advance=False)
+
+            if self.offline_devices:
+                names = ", ".join(f"{d[0]}({d[1]})" for d in self.offline_devices)
+                logger.warning("[任务管理器] 仍有 %s 台设备离线未完成：%s",
+                               len(self.offline_devices), names)
 
             self.finished_signal.emit(total_devices)
 
@@ -173,7 +194,7 @@ class SerialQueryManager(QThread):
     def _split_by_protocol(self, android_devices):
         """按「协议是否可用」把 Android 设备分成协议池与 legacy 池。
 
-        仅当本次查询类型是**协议可取全**的信息类查询（见 ``PROTOCOL_ONLY_TYPES``）时
+        仅当本次任务类型是**协议可取全**的信息类查询（见 ``PROTOCOL_ONLY_TYPES``）时
         才做此拆分；文件推送/日志导出等仍走 adb/SSH，归入 legacy 池。
         """
         if self.query_type not in self.PROTOCOL_ONLY_TYPES:
@@ -193,18 +214,28 @@ class SerialQueryManager(QThread):
             (protocol_devices if supported else legacy_devices).append(device)
         return protocol_devices, legacy_devices
 
-    def _process_parallel(self, devices, total_devices, workers, base=0):
+    def _process_parallel(self, devices, total_devices, workers, base=0, advance=True):
         """**滑动窗口**并发处理一批设备（完成一台立刻补一台）。
 
         旧实现按 8 台分组、组间串行：组里只要有一台慢设备（协议超时后降级 adb，
         单台 15~17s），后面所有设备都要干等 —— 实测第 9 台要多等 8s。
         现在并发上限仍受控（端口/连接数不放大），但不再有「整组等待」。
 
-        ``base`` 为前序池已完成的台数，用于把进度信号折算成全局 ``x/total``。
+        ``base`` 为前序池已处理的台数，用于把进度信号折算成全局 ``x/total``；
+        ``advance=False`` 表示这是补跑轮次，不再推进进度。
+
+        每台设备在派发前先做**秒级 TCP 可达性探测**：不可达（离线）就立刻跳过，
+        不再让协议/ADB 各自等满超时；跳过的设备记到 :attr:`offline_devices`，
+        任务结束后统一再试一次。
         """
         completed = [0]
         started = [0]
         counter_lock = threading.Lock()
+
+        def _bump_progress():
+            if not advance:
+                return
+            self.progress_signal.emit(base + completed[0], total_devices)
 
         def _handle_device(device_info):
             device_id, ip, password, system_type = device_info
@@ -215,6 +246,18 @@ class SerialQueryManager(QThread):
                         index, total_devices, device_id, ip)
             self._set_state(self.STATE_CONNECTING, device_id)
             GLOBAL_TASK.set_current(f"{device_id} ({ip})")
+
+            if not self._probe_device(device_id, ip):
+                # 离线：不 mark_done，设备保留在未完成清单里（可续跑）
+                with counter_lock:
+                    self.offline_devices.append(device_info)
+                    completed[0] += 1
+                self.state_signal.emit(device_id, self.STATE_OFFLINE)
+                logger.info("[任务管理器] %s (%s) 不可达，本轮跳过（结束后会再试一次）",
+                            device_id, ip)
+                _bump_progress()
+                return device_id
+
             try:
                 self._process_single_device(device_id, ip, password, system_type,
                                             needs_adb=is_android_device(device_id))
@@ -222,8 +265,7 @@ class SerialQueryManager(QThread):
                 GLOBAL_TASK.mark_done(device_info)
                 with counter_lock:
                     completed[0] += 1
-                    current = base + completed[0]
-                self.progress_signal.emit(current, total_devices)
+                _bump_progress()
             return device_id
 
         run_windowed(
@@ -233,6 +275,27 @@ class SerialQueryManager(QThread):
             on_dispatch=lambda dispatched, total: logger.info(
                 "[任务管理器] 已派发 %s/%s 台（并发上限 %s）", dispatched, total, workers),
         )
+        with counter_lock:
+            return completed[0]
+
+    @staticmethod
+    def _probe_device(device_id, ip):
+        """秒级判断设备是否可达：任一相关端口能建 TCP 即视为在线。
+
+        - Android：协议 10001 / 网络 ADB 5555 / SSH 22；
+        - Linux：只有 SSH 22。
+
+        掉电或网线松动的设备通常直接 ``Connection refused``/超时，
+        用 0.8s 超时即可判定，避免后续协议+ADB+SSH 各自等满超时（单台十几秒）。
+        """
+        ports = (22,) if not is_android_device(device_id) else (PROTOCOL_PORT, 5555, 22)
+        for port in ports:
+            try:
+                with socket.create_connection((ip, port), timeout=DEVICE_PROBE_TIMEOUT):
+                    return True
+            except OSError:
+                continue
+        return False
 
     def _should_stop(self):
         """本地停止（关窗/新任务）或**全局中断**任一成立即停止派发。"""

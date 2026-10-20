@@ -118,18 +118,30 @@ CONNECTION_STABILIZE_SECONDS = 2
 DEFAULT_SCREENSHOT_PATH = "./screenshot"
 """默认截图存储路径"""
 
-QUERY_MAX_WORKERS = 8
-"""协议可用设备的最大并发查询数：每台设备是独立 TCP，可安全高并发"""
+QUERY_MAX_WORKERS = 16
+"""协议可用设备的最大并发查询数。
 
-LEGACY_QUERY_MAX_WORKERS = 2
-"""无协议设备（走 adb/SSH）的最大并发数：adb server 为单进程，过高会相互干扰"""
+每台设备是**独立 TCP 连接**（源端口各自分配），16 个并发连接对本机临时端口
+（约 1.6 万）与局域网带宽都毫无压力；12 台规模可一次派完，不再分两批。"""
 
-LINUX_SSH_MAX_WORKERS = 3
+LEGACY_QUERY_MAX_WORKERS = 4
+"""无协议设备（走 adb/SSH）的最大并发数。
+
+adb server 为单进程，仍要克制；但所有 adb 操作已改为「只断开本设备」，
+4 台并发不会互相打断（此前全局 `adb disconnect` 会误伤并行设备）。"""
+
+LINUX_SSH_MAX_WORKERS = 4
 """Linux 机型（C08L/C16L/D16/D36/Q910）的 SSH 并发上限。
 
 这些设备只有 SSH 一条通道，每台是**独立连接**（paramiko 连接池按 host 隔离），
-并发 3 台即可消除「2~3 台 Linux 设备排队」的成倍等待；再高收益递减，
-而现场设备多为低配 ARM，小并发更稳。"""
+并发 4 台可消除「多台 Linux 设备排队」的成倍等待；现场设备多为低配 ARM，
+4 台并发的负载仍很轻。"""
+
+DEVICE_PROBE_TIMEOUT = 0.8
+"""派发前 TCP 可达性探测超时（秒）。
+
+设备在任务期间掉线（人为断电/网线松动）时，不再让协议/ADB 各自等满超时
+（单台可达十几秒），而是秒级判定「离线」并跳过；任务结束后会再试一次。"""
 
 SCREENSHOT_MAX_WORKERS = 16
 """协议截图的最大并发数。

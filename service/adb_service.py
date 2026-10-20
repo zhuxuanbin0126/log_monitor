@@ -103,7 +103,7 @@ class ADBService:
             stdout, stderr, returncode = run_command(cmd, timeout=60)
             logger.debug("[push] 推送结果: stdout=%s, stderr=%s, code=%s", stdout, stderr, returncode)
 
-            ADBService.disconnect()
+            ADBService.disconnect_device(ip)
             return stdout.strip(), stderr.strip(), returncode
         except Exception as e:
             return "", str(e), -1
@@ -130,7 +130,7 @@ class ADBService:
             cmd = f"{ADB_PATH} -s {serial} pull \"{remote_file}\" \"{local_file}\""
             stdout, stderr, returncode = run_command(cmd, timeout=60)
 
-            ADBService.disconnect()
+            ADBService.disconnect_device(ip)
             return stdout.strip(), stderr.strip(), returncode
         except Exception as e:
             return "", str(e), -1
@@ -145,17 +145,17 @@ class ADBService:
     @staticmethod
     def prepare_connection(ip, need_remount=False, device_id=None, password=None):
         """准备ADB连接（严格顺序）：
-        1. adb disconnect 清理已有连接
-        2. adb devices 确认无残留连接
+        1. 断开**本设备**的已有连接（并行处理多台设备时不能全局断开）
+        2. adb devices 记录当前连接
         3. adb connect 连接目标设备
         4. (仅 need_remount=True) adb root 获取管理员权限
         5. (仅 need_remount=True) adb remount 赋予文件传输权限
         """
         try:
-            # 步骤1: 断开所有已有连接
-            cmd = f"{ADB_PATH} disconnect"
-            run_command(cmd)
-            time.sleep(1)
+            # 步骤1: 只断开本设备（旧的 `adb disconnect` 会断开所有设备，
+            # 并行推送/查询时会把别的设备连好的连接一起打断）
+            ADBService.disconnect_device(ip)
+            time.sleep(0.3)
 
             # 步骤2: 确认当前无设备连接
             cmd = f"{ADB_PATH} devices"
@@ -345,7 +345,7 @@ class ADBService:
             stdout, stderr, returncode = run_command(cmd)
             if not stderr and stdout:
                 md5_value = stdout.strip().split()[0]
-                ADBService.disconnect()
+                ADBService.disconnect_device(ip)
                 return md5_value
 
             local_temp = f"temp_md5_{ip.replace('.', '_')}_{int(time.time())}"
@@ -356,10 +356,10 @@ class ADBService:
                     os.remove(local_temp)
                 except Exception:
                     pass
-                ADBService.disconnect()
+                ADBService.disconnect_device(ip)
                 return md5_value
 
-            ADBService.disconnect()
+            ADBService.disconnect_device(ip)
             return None
         except Exception:
             return None
@@ -452,37 +452,36 @@ class ADBService:
                     if attempt < max_retries - 1:
                         time.sleep(2)
                         continue
-                    ADBService.disconnect()
+                    ADBService.disconnect_device(ip)
                     return stdout, stderr, returncode
 
                 remote_md5_ok, verify_msg = ADBService.verify_remote_file(
                     ip, remote_file, local_md5, device_id=device_id, password=password)
                 if remote_md5_ok:
-                    ADBService.disconnect()
+                    ADBService.disconnect_device(ip)
                     return f"推送成功，{verify_msg}", "", 0
                 if attempt < max_retries - 1:
                     time.sleep(2)
                     continue
-                ADBService.disconnect()
+                ADBService.disconnect_device(ip)
                 return "", f"推送校验失败: {verify_msg}", -3
 
             except Exception as e:
                 if attempt < max_retries - 1:
                     time.sleep(2)
                     continue
-                ADBService.disconnect()
+                ADBService.disconnect_device(ip)
                 return "", str(e), -1
 
-        ADBService.disconnect()
+        ADBService.disconnect_device(ip)
         return "", f"已达到最大重试次数 ({max_retries})", -4
 
     @staticmethod
     def remount_system(ip):
         """重新挂载/system分区为可读写模式"""
         try:
-            cmd = f"{ADB_PATH} disconnect"
-            run_command(cmd)
-            time.sleep(1)
+            ADBService.disconnect_device(ip)
+            time.sleep(0.3)
 
             cmd = f"{ADB_PATH} connect {ip}:5555"
             stdout, stderr, returncode = run_command(cmd)
@@ -510,13 +509,25 @@ class ADBService:
 
     @staticmethod
     def set_permissions(ip, remote_file, permissions="777"):
-        """设置远程文件的权限（自动确保 ADB 连接）"""
-        # 确保设备已连接
-        ADBService.connect(ip)
-        time.sleep(0.5)
-        serial = ADBService.get_device_serial(ip)
-        cmd = f"{ADB_PATH} -s {serial} shell chmod {permissions} {remote_file}"
-        return run_command(cmd)
+        """设置远程文件权限。
+
+        先等 ``adb devices`` 真正列出该设备（状态为 ``device``）再执行 chmod：
+        旧实现连上就立刻取 serial，取不到时兜底成 ``ip:5555`` 去执行，
+        于是偶发 ``error: device 'ip:5555' not found``（实际上传/初始化已经成功，
+        只是这一条 chmod 打在了一个还不存在的连接上）。
+        """
+        for _attempt in range(2):
+            ADBService.connect(ip)
+            time.sleep(0.5)
+            serial = ADBService.get_online_serial(ip)
+            if not serial:
+                time.sleep(0.5)
+                continue
+            stdout, stderr, returncode = run_command(
+                f"{ADB_PATH} -s {serial} shell chmod {permissions} {remote_file}")
+            if returncode == 0 and not stderr:
+                return stdout, stderr, returncode
+        return "", f"ADB 连接未就绪（{ip}:5555 不在设备列表）", -1
 
     @staticmethod
     def set_executable(ip, remote_file):
@@ -525,17 +536,14 @@ class ADBService:
 
     @staticmethod
     def check_file_exists(ip, remote_file, max_retries=3, device_id=None, password=None):
-        """使用ADB检查远程文件是否存在，带重试机制"""
+        """使用ADB检查远程文件是否存在，带重试机制（只断开本设备，不误伤并行设备）"""
         is_fast_check = max_retries == 1
 
-        serial = ADBService.get_device_serial(ip)
         for attempt in range(max_retries):
             try:
                 if is_fast_check:
-                    cmd = f"{ADB_PATH} disconnect"
-                    run_command(cmd)
-                    cmd = f"{ADB_PATH} connect {ip}:5555"
-                    stdout, stderr, returncode = run_command(cmd)
+                    ADBService.disconnect_device(ip)
+                    stdout, stderr, returncode = ADBService.connect(ip)
                     time.sleep(0.5)
                 else:
                     stdout, stderr, returncode = ADBService.prepare_connection(
@@ -548,11 +556,12 @@ class ADBService:
                         continue
                     return False
 
+                serial = ADBService.get_online_serial(ip) or ADBService.get_device_serial(ip)
                 cmd = f"{ADB_PATH} -s {serial} shell ls -l {remote_file}"
                 stdout, stderr, returncode = run_command(cmd, timeout=5 if is_fast_check else 10)
 
                 if returncode == 0 and not stderr and "No such" not in stdout:
-                    ADBService.disconnect()
+                    ADBService.disconnect_device(ip)
                     return True
 
                 if attempt < max_retries - 1 and not is_fast_check:
@@ -561,7 +570,7 @@ class ADBService:
                 if attempt < max_retries - 1 and not is_fast_check:
                     time.sleep(1)
 
-        ADBService.disconnect()
+        ADBService.disconnect_device(ip)
         return False
 
     @staticmethod
