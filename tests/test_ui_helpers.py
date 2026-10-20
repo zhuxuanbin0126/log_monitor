@@ -26,6 +26,30 @@ def test_presenter_detects_failure():
     assert QueryResultPresenter.is_success({'sum_switch': '正常'}) is True
 
 
+def test_not_applicable_is_not_a_failure():
+    """Linux 设备无播放器概念 → 启动次数「无法获取」不应算查询失败。"""
+    results = {
+        'start_count': '无法获取',
+        'device_time': {'formatted_remote_time': '2026-10-20 12:00:00', 'time_diff': 1},
+    }
+    assert QueryResultPresenter.is_success(results) is True
+    assert QueryResultPresenter.not_applicable_fields(results) == ['start_count']
+    assert QueryResultPresenter.not_applicable_fields({'start_count': '3'}) == []
+
+
+def test_summary_marks_not_applicable_separately():
+    logs = []
+    presenter = QueryResultPresenter(lambda msg, **kw: logs.append(msg))
+    presenter.show_summary('all', 9, ['H16-00-0001'] * 9, [],
+                           [('C16L-D24-0F308', ['start_count'])])
+    joined = "\n".join(logs)
+
+    assert '查询成功: 9 台' in joined
+    assert '查询失败: 0 台' in joined
+    assert 'C16L-D24-0F308' in joined
+    assert '不适用' in joined
+
+
 def test_summary_output():
     logs = []
     presenter = QueryResultPresenter(lambda msg, **kw: logs.append(msg))

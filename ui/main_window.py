@@ -60,6 +60,7 @@ class MainWindow(BaseWindow):
         # 查询相关的变量
         self.successful_devices = []
         self.failed_devices = []
+        self.not_applicable_devices = []
         self.current_query_type = None
         self.getdevice_num = 0
         self._discovered_count = 0
@@ -615,6 +616,7 @@ class MainWindow(BaseWindow):
         # 初始化成功和失败设备列表
         self.successful_devices = []
         self.failed_devices = []
+        self.not_applicable_devices = []
         
         # 开始新的查询 变量作为数组传入线程 数据才会改变
         self.query_count = [0]
@@ -726,6 +728,7 @@ class MainWindow(BaseWindow):
                     self.getdevice_num,
                     self.successful_devices,
                     self.failed_devices,
+                    self.not_applicable_devices,
                 )
             # 更新状态栏提示
             op_text = self.query_presenter.query_type_text(self.current_query_type)
@@ -738,6 +741,10 @@ class MainWindow(BaseWindow):
             self.successful_devices.append(device_id)
         else:
             self.failed_devices.append(device_id)
+        # 「不适用」（如 Linux 设备无播放器概念 → 启动次数无法获取）单独记录，不计入失败
+        fields = QueryResultPresenter.not_applicable_fields(results)
+        if fields:
+            self.not_applicable_devices.append((device_id, fields))
     
     def on_query_error(self, device_id, error_msg):
         """处理查询错误"""

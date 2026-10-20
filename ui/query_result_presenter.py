@@ -16,6 +16,16 @@ QUERY_TYPE_TEXT = {
 
 QUERY_OPERATION_TYPES = {"all", "time", "boot_time", "start_count", "sum_switch"}
 
+NOT_APPLICABLE_MARK = "无法获取"
+"""「不适用」标记：Linux 设备无 MagicPlayer 播放器概念 → 启动次数恒为此值。
+
+它**不是失败**：设备本身就不具备该能力，硬算作查询失败会把 C16L 之类误判为「查询失败」。
+"""
+
+FAILURE_MARKS = ("失败", "错误")
+"""真正的失败关键字（不含「无法」，避免把「不适用」误判为失败）"""
+
+
 
 class QueryResultPresenter:
     """把查询结果字典转换为用户可读日志，并生成汇总。"""
@@ -34,13 +44,24 @@ class QueryResultPresenter:
 
     @staticmethod
     def is_success(results: dict) -> bool:
-        """根据结果内容判断本次查询/操作是否成功。"""
+        """根据结果内容判断本次查询/操作是否成功（「不适用」不计为失败）。"""
         for value in results.values():
-            if isinstance(value, dict) and 'error' in value:
-                return False
-            if isinstance(value, str) and ('失败' in value or '错误' in value or '无法' in value):
-                return False
+            if isinstance(value, dict):
+                if 'error' in value:
+                    return False
+                continue
+            if isinstance(value, str):
+                if NOT_APPLICABLE_MARK in value:
+                    continue                     # 不适用：设备本就不具备该能力
+                if any(mark in value for mark in FAILURE_MARKS):
+                    return False
         return True
+
+    @staticmethod
+    def not_applicable_fields(results: dict) -> list:
+        """返回结果中「不适用」的字段名（如 Linux 设备的 ``start_count``）。"""
+        return [key for key, value in results.items()
+                if isinstance(value, str) and NOT_APPLICABLE_MARK in value]
 
     def present(self, device_id: str, results: dict) -> bool:
         """输出单设备结果，返回是否成功。"""
@@ -78,9 +99,10 @@ class QueryResultPresenter:
             self._log("警告: 设备时间与系统时间偏差超过120秒", is_warning=True)
 
     def _present_start_count(self, start_count) -> None:
-        self._log(f"播放器启动次数: {start_count}")
-        if start_count == '无法获取':
+        if start_count == NOT_APPLICABLE_MARK:
+            self._log("播放器启动次数: 无法获取（不适用：该机型无 MagicPlayer 播放器，不计入查询失败）")
             return
+        self._log(f"播放器启动次数: {start_count}")
         try:
             count = int(start_count)
         except (ValueError, TypeError):
@@ -88,18 +110,25 @@ class QueryResultPresenter:
         if count > 1:
             self._log(f"警告: 播放器启动次数异常，当前值为 {count}", is_warning=True)
 
-    def show_summary(self, current_type, total, successful, failed) -> None:
-        """输出查询/操作汇总。"""
+    def show_summary(self, current_type, total, successful, failed,
+                     not_applicable=None) -> None:
+        """输出查询/操作汇总（「不适用」单独一行，不计入失败）。"""
         is_query = self.is_query_operation(current_type)
         op_text = self.query_type_text(current_type)
         success_count = len(successful)
         fail_count = len(failed)
+        na_list = list(not_applicable or [])
 
         self._log("\n-----------------------------------------------------------------------")
         if is_query:
             self._log("查询汇总:")
             self._log(f"  总设备数: {total}")
             self._log(f"  查询成功: {success_count} 台")
+            if na_list:
+                names = ", ".join(device_id for device_id, _fields in na_list)
+                self._log(f"  不适用: {len(na_list)} 台 - {names}"
+                          f"（Linux 设备无播放器概念，启动次数不计入失败）",
+                          is_warning=True)
             self._log(f"  查询失败: {fail_count} 台")
             if failed:
                 self._log(f"  失败设备: {', '.join(failed)}", is_error=True)

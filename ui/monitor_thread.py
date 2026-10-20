@@ -195,8 +195,8 @@ class MonitorThread(QThread):
                 msg += f"- 设备时间: {device_data['initial_card_time']}\n"
             if 'initial_time_diff' in device_data:
                 msg += f"- 与电脑当前的时间差: {device_data['initial_time_diff']}秒\n"
-            if device_id.startswith(('C08L', 'C16L', 'D16')):
-                msg += "- 启动次数: 无法获取\n"
+            if not is_android_device(device_id):
+                msg += "- 启动次数: 无法获取（Linux 设备无播放器概念）\n"
             elif 'initial_start_count' in device_data:
                 msg += f"- 播放器启动次数: {device_data['initial_start_count']}\n"
             self.update_signal.emit(msg)

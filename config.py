@@ -41,9 +41,9 @@ EXCEL_DIR = os.path.join(OUTPUT_DIR, "excel")
 SUPPORTED_DEV_TYPES = (
     'A-B-C-D-H', 'A3L', 'A4L', 'A5L', 'A6L', 'B6L', 'B8L',
     'C08L', 'C16H', 'H4K', 'H6', 'H8', 'D16', 'C16L',
-    'A7', 'A8', 'H20', 'H16',
+    'A7', 'A8', 'H20', 'H16', 'Q910',
 )
-"""支持的设备类型列表（元组，不可变）"""
+"""支持的设备类型列表（元组，不可变；``Q910`` 为定制款 Linux 机型）"""
 
 DEFAULT_DEV_TYPE = 'A-B-C-D-H'
 """默认设备类型"""

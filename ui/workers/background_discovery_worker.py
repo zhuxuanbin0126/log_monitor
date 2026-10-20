@@ -120,11 +120,20 @@ class BackgroundDiscovery(QObject):
             logger.info("后台心跳找卡已停止")
 
     def _on_probed(self, found) -> None:
-        """主线程侧：按同口径过滤 → 记录一轮结果 → 仅在变化时上报。"""
+        """主线程侧：按同口径过滤 → 记录一轮结果 → **仅在有变化时**上报。
+
+        无变化时**完全不打印**（心跳每轮必然重新发现全部设备，逐台打印会刷屏）；
+        有变化时只打印**变动的那几台**。
+        """
         if self._accept is not None:
             found = [pair for pair in found if self._accept(pair[0])]
         diff = self._tracker.observe([tuple(pair) for pair in found])
-        if diff.changed:
-            logger.info("后台心跳：上线 %s 台，下线 %s 台",
-                        len(diff.added), len(diff.removed))
-            self.changed.emit(diff.added, diff.removed)
+        if not diff.changed:
+            return
+        if diff.added:
+            logger.info("后台心跳：上线 %s 台 %s", len(diff.added),
+                        ", ".join(f"{dev}({ip})" for dev, ip in diff.added))
+        if diff.removed:
+            logger.info("后台心跳：下线 %s 台 %s", len(diff.removed),
+                        ", ".join(f"{dev}({ip})" for dev, ip in diff.removed))
+        self.changed.emit(diff.added, diff.removed)

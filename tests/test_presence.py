@@ -118,3 +118,46 @@ def test_probe_presence_honours_should_stop(monkeypatch):
     found = uf.probe_presence(duration=5, should_stop=lambda: True)
     assert found == []
     assert sock.closed
+
+
+# ---------------------------------------------------------------- 日志噪音
+
+def _capture_info(monkeypatch):
+    """截获模块 logger 的 info 输出（避免依赖 caplog 的 handler 配置）。"""
+    records = []
+    monkeypatch.setattr(uf.logger, "info",
+                        lambda *args, **kwargs: records.append(args))
+    return records
+
+
+def test_probe_presence_is_quiet_by_default(monkeypatch):
+    """心跳每轮都会重新发现全部设备 → 逐台 INFO 会刷屏，故默认不打 INFO。"""
+    sock = _FakeSocket("192.168.1.10", [
+        (_id_payload("A3L-AAAA111"), ("192.168.1.101", 9527)),
+    ])
+    monkeypatch.setattr(uf, "open_probe_sockets", lambda: [sock])
+    monkeypatch.setattr(
+        uf.select, "select",
+        lambda rlist, _w, _x, _t: ([s for s in rlist if s.responses], [], []))
+
+    records = _capture_info(monkeypatch)
+    found = uf.probe_presence(duration=0.05, probe_interval=0.01)
+
+    assert found == [("A3L-AAAA111", "192.168.1.101")]
+    assert all("发现设备" not in str(args) for args in records)
+
+
+def test_scan_devices_still_logs_found(monkeypatch):
+    """首次扫描保留 INFO 级「发现设备」，便于现场核对找卡结果。"""
+    sock = _FakeSocket("192.168.1.10", [
+        (_id_payload("A3L-AAAA111"), ("192.168.1.101", 9527)),
+    ])
+    monkeypatch.setattr(uf, "open_probe_sockets", lambda: [sock])
+    monkeypatch.setattr(
+        uf.select, "select",
+        lambda rlist, _w, _x, _t: ([s for s in rlist if s.responses], [], []))
+
+    records = _capture_info(monkeypatch)
+    uf.scan_devices(timeout=2, min_scan=0.0, quiet_window=0.0, probe_interval=0.01)
+
+    assert any("发现设备" in str(args) for args in records)

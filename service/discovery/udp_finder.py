@@ -179,9 +179,14 @@ def parse_device_id(data: bytes) -> Optional[str]:
 
 def _drain_socket(sock: socket.socket,
                   discovered: Dict[str, Tuple[str, str]],
-                  on_device: Optional[Callable[[str, str], None]]
+                  on_device: Optional[Callable[[str, str], None]],
+                  verbose: bool = True
                   ) -> Optional[Tuple[str, str]]:
-    """从单个 socket 读取一包并解析；返回新发现的 ``(device_id, ip)`` 或 None。"""
+    """从单个 socket 读取一包并解析；返回新发现的 ``(device_id, ip)`` 或 None。
+
+    ``verbose=False`` 时「发现设备」降到 DEBUG 级：后台心跳每轮都会重新发现全部设备，
+    INFO 级会把同一批设备刷屏（只在首次扫描时才有 INFO 价值）。
+    """
     try:
         data, addr = sock.recvfrom(MAX_PACKET_SIZE)
     except OSError:
@@ -195,7 +200,10 @@ def _drain_socket(sock: socket.socket,
         return None
 
     discovered[device_id] = (device_id, addr[0])
-    logger.info("发现设备: %s -> %s", device_id, addr[0])
+    if verbose:
+        logger.info("发现设备: %s -> %s", device_id, addr[0])
+    else:
+        logger.debug("发现设备: %s -> %s", device_id, addr[0])
     if on_device is not None:
         try:
             on_device(device_id, addr[0])
@@ -210,6 +218,7 @@ def scan_devices(timeout: float = UDP_SCAN_TIMEOUT, port: int = UDP_DISCOVERY_PO
                  quiet_window: float = UDP_QUIET_WINDOW,
                  probe_interval: float = UDP_PROBE_INTERVAL,
                  should_stop: Optional[Callable[[], bool]] = None,
+                 verbose: bool = True,
                  ) -> List[Tuple[str, str]]:
     """扫描局域网内测试设备。
 
@@ -271,7 +280,7 @@ def scan_devices(timeout: float = UDP_SCAN_TIMEOUT, port: int = UDP_DISCOVERY_PO
             readable, _, _ = select.select(
                 sockets, [], [], min(probe_interval, max(0.05, timeout - elapsed)))
             for sock in readable:
-                found = _drain_socket(sock, discovered, on_device)
+                found = _drain_socket(sock, discovered, on_device, verbose=verbose)
                 if found is not None:
                     last_found = time.monotonic()
     finally:
@@ -288,12 +297,16 @@ def probe_presence(duration: float = 2.0, port: int = UDP_DISCOVERY_PORT,
                    probe_interval: float = UDP_PROBE_INTERVAL,
                    on_device: Optional[Callable[[str, str], None]] = None,
                    should_stop: Optional[Callable[[], bool]] = None,
+                   verbose: bool = False,
                    ) -> List[Tuple[str, str]]:
     """有界的「在场探测」：``duration`` 秒内周期重发探测包并收集应答。
 
     与 :func:`scan_devices` 的关键区别：本函数**不做发现即收尾**——即使一台设备
     都没应答，也只在 ``duration`` 秒后结束。因此**单轮总时长可控**，适合做后台心跳
     （周期短且稳定，不会因为「一台都没发现」而白等整个扫描超时）。
+
+    ``verbose`` 默认 **False**（心跳每轮都会重新发现全部设备，逐台 INFO 会刷屏）；
+    首次扫描请用 :func:`scan_devices`。
 
     Args:
         duration: 单轮探测时长（秒）
@@ -323,7 +336,7 @@ def probe_presence(duration: float = 2.0, port: int = UDP_DISCOVERY_PORT,
             readable, _, _ = select.select(
                 sockets, [], [], min(probe_interval, max(0.05, duration - elapsed)))
             for sock in readable:
-                _drain_socket(sock, discovered, on_device)
+                _drain_socket(sock, discovered, on_device, verbose=verbose)
     finally:
         for sock in sockets:
             try:

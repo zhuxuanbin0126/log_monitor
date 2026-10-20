@@ -46,7 +46,7 @@ class ADBDeviceManager:
         if is_android_device(device_id):
             return "android"
         dev_type = device_id.split('-')[0] if '-' in device_id else device_id
-        if dev_type in ['C08L', 'C16L', 'D16', 'D36']:
+        if dev_type in ['C08L', 'C16L', 'D16', 'D36', 'Q910']:
             return "linux"
         return "unknown"
 
