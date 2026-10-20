@@ -19,12 +19,32 @@ def get_project_root():
     else:
         return os.path.dirname(os.path.abspath(__file__))
 
+
 PROJECT_ROOT = get_project_root()
 
+
+def _external_or_bundled(*parts):
+    """**外部（exe 旁边）优先**，缺失才回退到 exe 内解压的副本。
+
+    打包后 onefile 会把 datas 解到 ``%TEMP%\\_MEIxxxx``；部分电脑的临时目录不可写
+    （或被杀软拦截），从那里读脚本/推文件都会失败。发布包在 exe 旁带了一份
+    ``tools/``，因此这里一律优先用外部真实路径。
+    """
+    external = os.path.join(PROJECT_ROOT, *parts)
+    if os.path.exists(external):
+        return external
+    bundled_root = getattr(sys, '_MEIPASS', '')
+    if bundled_root:
+        bundled = os.path.join(bundled_root, *parts)
+        if os.path.exists(bundled):
+            return bundled
+    return external
+
+
 # ---- 工具与节目路径 ----
-TOOL_PATH = os.path.join(PROJECT_ROOT, "tools")
-PROGRAM_PATH = os.path.join(PROJECT_ROOT, "program")
-GET_INFO_PATH = os.path.join(PROJECT_ROOT, "tools", "getdeviceinfo.sh")
+TOOL_PATH = _external_or_bundled("tools")
+PROGRAM_PATH = _external_or_bundled("program")
+GET_INFO_PATH = _external_or_bundled("tools", "getdeviceinfo.sh")
 
 # ---- 输出目录 ----
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")

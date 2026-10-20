@@ -16,27 +16,83 @@ import re
 from .adb_env import adb_subprocess_env, is_adb_command
 
 
-def get_project_root():
-    """获取项目根目录，支持打包后的环境"""
+def app_root():
+    """程序根目录：打包后为 **exe 所在目录**（可写、持久），开发态为项目根目录。"""
     if getattr(sys, 'frozen', False):
-        if hasattr(sys, '_MEIPASS'):
-            return sys._MEIPASS
-        else:
-            return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def get_project_root():
+    """打包内部资源根：onefile 下为 ``sys._MEIPASS`` 临时解压目录；开发态同 :func:`app_root`。"""
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        return sys._MEIPASS
+    return app_root()
 
 
 PROJECT_ROOT = get_project_root()
 
-# 工具目录
-if getattr(sys, 'frozen', False):
-    TOOLS_DIR = os.path.join(PROJECT_ROOT, 'tools', 'bin')
-else:
-    TOOLS_DIR = os.path.join(PROJECT_ROOT, 'tools', 'bin')
+# ---- 工具目录（**外部优先**）----
+# 背景：部分电脑上 ``%TEMP%`` 被重定向/不可写，或杀软/AppLocker 禁止执行临时目录里的
+# 程序 —— 此时从 ``sys._MEIPASS\tools\bin`` 启动 adb.exe / plink.exe 会失败，
+# 表现为「tools 下的工具调不起来，很多功能不可用」。
+# 因此**优先使用 exe 旁边的真实目录**（发布包必须带 ``tools/``），
+# 仅在外部缺失时才回退到 exe 内解压的副本。
+EXTERNAL_TOOLS_DIR = os.path.join(app_root(), 'tools', 'bin')
+BUNDLED_TOOLS_DIR = (os.path.join(PROJECT_ROOT, 'tools', 'bin')
+                     if getattr(sys, 'frozen', False) else '')
 
-ADB_PATH = os.path.join(TOOLS_DIR, 'adb.exe').replace('/', '\\')
-TOOLS_DIR = TOOLS_DIR.replace('/', '\\')
+_TOOL_PATH_CACHE = {}
+
+
+def tool_search_paths(tool_name):
+    """工具候选路径（外部在前、内置在后）。"""
+    paths = [os.path.join(EXTERNAL_TOOLS_DIR, tool_name)]
+    if BUNDLED_TOOLS_DIR:
+        paths.append(os.path.join(BUNDLED_TOOLS_DIR, tool_name))
+    return paths
+
+
+def get_tool_path(tool_name):
+    """获取工具的完整路径（Windows 反斜杠）：**外部 tools/bin 优先**，缺失才用内置副本。
+
+    结果按工具名缓存，避免 adb 高频调用时反复 ``os.path.isfile``。
+    """
+    cached = _TOOL_PATH_CACHE.get(tool_name)
+    if cached:
+        return cached
+    candidates = tool_search_paths(tool_name)
+    for path in candidates:
+        if os.path.isfile(path):
+            resolved = path.replace('/', '\\')
+            _TOOL_PATH_CACHE[tool_name] = resolved
+            return resolved
+    # 都不存在：返回首选路径（调用方会拿到「文件不存在」这一确定性错误）
+    fallback = candidates[0].replace('/', '\\')
+    _TOOL_PATH_CACHE[tool_name] = fallback
+    return fallback
+
+
+TOOLS_DIR = (EXTERNAL_TOOLS_DIR if os.path.isdir(EXTERNAL_TOOLS_DIR)
+             else (BUNDLED_TOOLS_DIR or EXTERNAL_TOOLS_DIR)).replace('/', '\\')
+ADB_PATH = get_tool_path('adb.exe')
+
+
+def tools_status(names=None):
+    """工具可用性快照（启动时写入日志，便于现场快速定位环境问题）。"""
+    names = names or (
+        'adb.exe', 'DeviceId.exe', 'plink.exe', 'pscp.exe',
+        'HPassword.exe', 'HSDKCmd.exe', 'bash.exe', 'grep.exe',
+    )
+    resolved = {name: get_tool_path(name) for name in names}
+    return {
+        'external_dir': EXTERNAL_TOOLS_DIR,
+        'external_exists': os.path.isdir(EXTERNAL_TOOLS_DIR),
+        'bundled_dir': BUNDLED_TOOLS_DIR,
+        'missing': [name for name, path in resolved.items() if not os.path.isfile(path)],
+        'resolved': resolved,
+    }
+
 
 # 定义Android设备类型列表
 ANDROID_DEV_TYPES = ['A3L', 'A4L', 'A5L', 'A6L', 'A7', 'A8', 'B6L', 'B8L', 'C16H', 'H4K', 'H6', 'H8', 'H16', 'H20']
@@ -44,11 +100,13 @@ ANDROID_DEV_TYPES = ['A3L', 'A4L', 'A5L', 'A6L', 'A7', 'A8', 'B6L', 'B8L', 'C16H
 LINUX_DEV_TYPES = ['C08L', 'C16L', 'D16', 'D36', 'Q910']
 """Linux 机型：不支持 MagicPlayer 协议，走 SSH；也无播放器概念（无启动次数）"""
 
-# 加载device_info.json获取OTG配置
+# 加载device_info.json获取OTG配置（**外部优先**：exe 旁边的文件可现场改）
 DEVICE_OTG_CONFIG = {}
 try:
-    device_info_path = os.path.join(PROJECT_ROOT, 'device_info.json')
-    if os.path.exists(device_info_path):
+    _device_info_candidates = [os.path.join(app_root(), 'device_info.json'),
+                               os.path.join(PROJECT_ROOT, 'device_info.json')]
+    device_info_path = next((p for p in _device_info_candidates if os.path.exists(p)), '')
+    if device_info_path:
         with open(device_info_path, 'r', encoding='utf-8') as f:
             device_info_list = json.load(f)
             for device_info in device_info_list:
@@ -63,12 +121,6 @@ try:
                             DEVICE_OTG_CONFIG[model] = {'path': path, 'value': value}
 except Exception:
     pass
-
-
-def get_tool_path(tool_name):
-    """获取工具的完整路径，确保使用反斜杠格式（Windows）"""
-    path = os.path.join(TOOLS_DIR, tool_name)
-    return path.replace('/', '\\')
 
 
 def _resolve_command_env(cmd, env):
