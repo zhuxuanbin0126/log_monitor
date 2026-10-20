@@ -58,12 +58,18 @@ def build_counts_command(start_count_cmd: str, switch_path: str,
 
     ``start_count_cmd`` 为空时用 ``true`` 占位（该型号不支持启动次数），
     仍保留空段以维持四段结构，便于统一解析。
+
+    计数器文件用 ``[ -f ]`` 守卫：文件不存在时显式 ``echo 0``（=无记录），
+    而不是让 ``wc`` 报错后输出空串 —— 后者会被误判为「协议取不到」，
+    进而白走 adb/SSH 降级（实测单台多花 15~20s）。
     """
     marker = f"echo {COUNT_SPLIT_MARKER}"
     start = start_count_cmd.strip() or "true"
-    return (f"{marker}; {start}; {marker}; "
-            f"wc -l {switch_path} 2>/dev/null; {marker}; "
-            f"wc -l {network_path} 2>/dev/null")
+    switch_cmd = (f"if [ -f {switch_path} ]; then wc -l {switch_path}; "
+                  f"else echo 0; fi")
+    network_cmd = (f"if [ -f {network_path} ]; then wc -l {network_path}; "
+                   f"else echo 0; fi")
+    return f"{marker}; {start}; {marker}; {switch_cmd}; {marker}; {network_cmd}"
 
 
 def _first_int(text: str) -> Optional[int]:
@@ -103,17 +109,50 @@ def query_counts_batched(ip: str, switch_path: str, network_path: str, *,
     """一次加密 ``exec`` 批量取「启动次数 + 开关机次数 + 网络开关机次数」。
 
     Returns:
-        解析后的计数 dict（值可能为 ``None``）；协议不可用/无有效回复返回 ``None``
-        （调用方据此逐项降级 adb/SSH）。
+        解析后的计数 dict（值可能为 ``None``）；协议不可用/无有效回复/输出无法
+        解析时返回 ``None``（调用方据此走**逐项协议 exec** 再考虑 adb/SSH）。
     """
     if not is_protocol_supported(ip):
         return None
     command = build_counts_command(start_count_cmd, switch_path, network_path)
     result = exec_if_supported(ip, command, **kwargs)
     if result is None:
-        logger.debug("设备 %s 批量计数 exec 无回复，逐项降级", ip)
+        logger.info("设备 %s 批量计数 exec 无回复，改用逐项协议 exec", ip)
         return None
-    return parse_counts_output(result.text())
+    parsed = parse_counts_output(result.text())
+    if all(value is None for value in parsed.values()):
+        logger.info(
+            "设备 %s 批量计数输出无法解析（exit=%s, error=%r, 输出前 300 字符=%r），"
+            "改用逐项协议 exec",
+            ip, result.exit_code, (result.error or "")[:120], result.text()[:300])
+        return None
+    return parsed
+
+
+def query_counts_individually(ip: str, switch_path: str, network_path: str, *,
+                              start_count_cmd: str = START_COUNT_CMD,
+                              **kwargs) -> Dict[str, Any]:
+    """逐项协议 ``exec`` 取计数（批量命令解析失败时的**协议内**兜底）。
+
+    三次 exec 各约几十毫秒，比降级到 adb/SSH（单台 15~20s）快两个数量级，
+    且不依赖 adb 连接，是「批量串命令在某固件上不可用」时的稳妥退路。
+    """
+    outcome: Dict[str, Any] = {
+        "start_count": None, "switch_count": None, "network_count": None,
+    }
+    if not is_protocol_supported(ip):
+        return outcome
+    if start_count_cmd:
+        result = exec_if_supported(ip, start_count_cmd, **kwargs)
+        if result is not None and result.exit_code == 0 and result.text():
+            outcome["start_count"] = result.text()
+    for key, path in (("switch_count", switch_path),
+                      ("network_count", network_path)):
+        command = f"if [ -f {path} ]; then wc -l {path}; else echo 0; fi"
+        result = exec_if_supported(ip, command, **kwargs)
+        if result is not None:
+            outcome[key] = _count_from_wc(result.text())
+    return outcome
 
 
 @dataclass
@@ -178,6 +217,14 @@ def query_all(monitor_service, device_id: str, ip: str, password: str,
         ip, switch_path, network_path, start_count_cmd=start_cmd)
     if counts is not None:
         outcome.protocol_used = True
+    else:
+        # 批量串命令在部分固件上不可用 → **仍在协议内**逐项 exec，
+        # 避免动辄降级到 adb（实测单台 15~20s）
+        individual = query_counts_individually(
+            ip, switch_path, network_path, start_count_cmd=start_cmd)
+        if any(value is not None for value in individual.values()):
+            counts = individual
+            outcome.protocol_used = True
     counts = counts or {}
 
     # 播放器启动次数

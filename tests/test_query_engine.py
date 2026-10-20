@@ -12,6 +12,20 @@ def test_build_counts_command_has_three_markers():
     assert "/data/b.csv" in cmd
 
 
+def test_build_counts_command_guards_missing_files():
+    """文件不存在时显式 echo 0，避免被误判为「取不到」而白白降级 adb/SSH。"""
+    cmd = qe.build_counts_command("getprop x", "/data/a.csv", "/data/b.csv")
+    assert cmd.count("else echo 0; fi") == 2
+    assert "2>/dev/null" not in cmd
+
+
+def test_parse_counts_output_treats_echo_zero_as_zero():
+    text = (f"{qe.COUNT_SPLIT_MARKER}\n1\n{qe.COUNT_SPLIT_MARKER}\n"
+            f"0\n{qe.COUNT_SPLIT_MARKER}\n0\n")
+    parsed = qe.parse_counts_output(text)
+    assert parsed == {"start_count": "1", "switch_count": 0, "network_count": 0}
+
+
 def test_build_counts_command_empty_start_uses_true():
     cmd = qe.build_counts_command("", "/data/a.csv", "/data/b.csv")
     assert "true" in cmd

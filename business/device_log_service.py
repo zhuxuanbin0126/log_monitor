@@ -4,48 +4,85 @@
 """设备日志服务 - 负责开关机计数、日志清除和导出"""
 
 import os
+import re
 import time
 from datetime import datetime
 
-from config import USE_PROTOCOL_QUERY
 from service.tool_service import ToolService
 from service.file_service import FileService
 from service.adb_service import ADBService
 from service.logging_service import get_logger
-from service.protocol import line_count_from_output
-from service.protocol.command_query import exec_if_supported
 
 logger = get_logger(__name__)
+
+COUNT_SPLIT_MARKER = "___LM_SWITCH_SPLIT___"
+"""一次往返取两个计数时的分段标记"""
 
 
 class DeviceLogService:
     """设备日志业务服务类，负责开关机计数读取、日志清除和导出"""
 
     @staticmethod
-    def _protocol_line_count(ip, file_path):
-        """协议 exec 统计文件行数（``wc -l``）；文件不存在或失败返回 None。
+    def _count_command(file_path):
+        """文件计数命令：文件不存在时显式输出 ``0``（=无记录）。
 
-        开关机次数 = 行数 - 1（首行为表头），与旧 adb/SSH 通道口径一致。
+        原先用 ``wc -l path``，文件不存在时输出空串 → 被误判为「取不到」→
+        回落 adb/SSH（`disconnect` + `sleep` + 连接重试），单台白花 10~20s。
         """
-        lines = line_count_from_output(exec_if_supported(ip, f"wc -l {file_path}"))
-        if lines is None:
+        return f"if [ -f {file_path} ]; then wc -l {file_path}; else echo 0; fi"
+
+    @staticmethod
+    def _parse_counts(text):
+        """解析 ``标记 + 计数 + 标记 + 计数`` 形式的输出；无法解析返回 None。
+
+        计数 = ``wc -l`` 行数 − 1（首行为表头）。
+        """
+        parts = (text or "").split(COUNT_SPLIT_MARKER)
+        if len(parts) < 3:
             return None
-        return max(0, lines - 1)
+
+        def _one(raw):
+            match = re.search(r"\d+", raw or "")
+            return max(0, int(match.group()) - 1) if match else None
+
+        switch_count = _one(parts[1])
+        network_count = _one(parts[2])
+        if switch_count is None and network_count is None:
+            return None
+        return switch_count or 0, network_count or 0
+
+    @staticmethod
+    def _query_counts_once(ip, password, device_id, switch_path, network_path):
+        """**一次往返**取「开关机次数 + 网络开关机次数」。
+
+        Android 走协议加密 ``Command.exec``，Linux 走 SSH；无论哪种都只一个
+        往返，替代原先「逐个文件 check_file_exists + 3 次重试」的多次往返。
+        """
+        marker = COUNT_SPLIT_MARKER
+        command = (f"echo {marker}; {DeviceLogService._count_command(switch_path)}; "
+                   f"echo {marker}; {DeviceLogService._count_command(network_path)}")
+        stdout, stderr, _ = ToolService.execute_query_command(
+            device_id, ip, password, command, ".")
+        if stderr and not stdout:
+            logger.debug("设备 %s 一次往返取计数失败: %s", device_id, stderr)
+        return DeviceLogService._parse_counts(stdout)
 
     @staticmethod
     def sum_switch_count(ip, password, device_id, path):
-        """设备累计开机次数（协议优先，失败回落 adb/SSH）；优化错误处理和重试"""
+        """设备累计开机次数（一次往返优先，失败才逐文件降级）。"""
         try:
             switch_counter_path = f"{path}/swich_counter.csv"
             network_counter_path = f"{path}/network_counter.csv"
 
-            # 协议通道：加密 Command.exec 直接读计数器文件行数（ms 级）
-            if USE_PROTOCOL_QUERY:
-                proto_switch = DeviceLogService._protocol_line_count(ip, switch_counter_path)
-                proto_network = DeviceLogService._protocol_line_count(ip, network_counter_path)
-                if proto_switch is not None or proto_network is not None:
-                    return proto_switch or 0, proto_network or 0, True, None
+            # 一次往返：Android 走协议加密 exec（ms 级）、Linux 走 SSH（单次）
+            counts = DeviceLogService._query_counts_once(
+                ip, password, device_id, switch_counter_path, network_counter_path)
+            if counts is not None:
+                logger.info("[开关机计数] %s 一次往返取数成功: 开关机=%s 网络开关机=%s",
+                            device_id, counts[0], counts[1])
+                return counts[0], counts[1], True, None
 
+            logger.info("[开关机计数] %s 一次往返未取到，逐文件降级", device_id)
             switch_time = 0
             network_time = 0
 
