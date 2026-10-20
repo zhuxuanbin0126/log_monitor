@@ -1,14 +1,14 @@
 from PyQt5.QtCore import QThread, pyqtSignal
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 from service.tool_service import ToolService
 from service.adb_service import ADBService
 from service.adb_device_manager import ADBDeviceManager
+from service.batch_dispatch import run_grouped
 from service.device_utils import is_android_device
 from service.logging_service import get_logger
 from service.protocol import get_device_status
-from config import LEGACY_QUERY_MAX_WORKERS, QUERY_MAX_WORKERS
+from config import LEGACY_QUERY_MAX_WORKERS, QUERY_GROUP_SIZE, QUERY_MAX_WORKERS
 from business.query_dispatcher import build_query_dispatch
 
 logger = get_logger(__name__)
@@ -178,31 +178,29 @@ class SerialQueryManager(QThread):
         return protocol_devices, legacy_devices
 
     def _process_parallel(self, devices, total_devices, workers):
-        """并行处理一批设备（每台设备内部自行决定走协议还是 adb/SSH）。"""
-        completed = 0
+        """分组限流地处理一批设备（每台内部自行决定走协议还是 adb/SSH）。
+
+        组内并发受限、组间串行：把峰值负载钉在 ``QUERY_GROUP_SIZE`` 量级，
+        避免几十台设备同时执行时压垮 adb server / 网卡 / 设备端连接数。
+        """
+        completed = [0]
         completed_lock = threading.Lock()
 
         def _handle_device(device_info):
-            nonlocal completed
             device_id, ip, password, system_type = device_info
             try:
                 self._process_single_device(device_id, ip, password, system_type,
                                             needs_adb=is_android_device(device_id))
             finally:
                 with completed_lock:
-                    completed += 1
-                    current = completed
+                    completed[0] += 1
+                    current = completed[0]
                 self.progress_signal.emit(current, total_devices)
+            return device_id
 
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
-            futures = [executor.submit(_handle_device, d) for d in devices]
-            for f in as_completed(futures):
-                if not self.is_running:
-                    break
-                try:
-                    f.result(timeout=180)
-                except Exception as e:
-                    logger.warning("[并行管理器] 设备任务异常: %s", e)
+        run_grouped(devices, _handle_device,
+                    group_size=QUERY_GROUP_SIZE, max_workers=workers,
+                    should_stop=lambda: not self.is_running)
     
     def _protocol_ready(self, device_id, ip):
         """该设备本次查询能否**完全**走协议（无需 adb/SSH 前置）。"""

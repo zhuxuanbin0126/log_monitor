@@ -1,4 +1,6 @@
-"""ADBService 设备状态解析测试（不触网、不调用外部程序）。"""
+"""ADBService 设备状态解析与同内容 MD5 备忘测试（不触网、不调用外部程序）。"""
+
+import os
 
 from service import adb_service as adb
 
@@ -44,3 +46,44 @@ def test_get_online_serial_requires_device_state(monkeypatch):
 def test_get_online_serial_missing_device(monkeypatch):
     monkeypatch.setattr(adb, "run_command", _fake_devices("List of devices attached\n"))
     assert adb.ADBService.get_online_serial("10.0.0.9") is None
+
+
+# ---------------------------------------------------------------- 同内容 MD5 备忘
+
+def test_local_md5_once_reuses_hash_for_same_content(tmp_path, monkeypatch):
+    calls = []
+
+    def _fake_md5(path):
+        calls.append(path)
+        return "deadbeef"
+
+    monkeypatch.setattr(adb, "calculate_md5", _fake_md5)
+    adb._LOCAL_MD5_MEMO.clear()                      # pylint: disable=protected-access
+
+    target = tmp_path / "program.tar.gz"
+    target.write_bytes(b"payload")
+
+    assert adb.ADBService.local_md5_once(str(target)) == "deadbeef"
+    assert adb.ADBService.local_md5_once(str(target)) == "deadbeef"
+    assert len(calls) == 1                           # 同一内容只读盘/哈希一次
+
+
+def test_local_md5_once_invalidates_after_file_change(tmp_path, monkeypatch):
+    calls = []
+
+    def _fake_md5(path):
+        calls.append(path)
+        return f"hash{len(calls)}"
+
+    monkeypatch.setattr(adb, "calculate_md5", _fake_md5)
+    adb._LOCAL_MD5_MEMO.clear()                      # pylint: disable=protected-access
+
+    target = tmp_path / "program.tar.gz"
+    target.write_bytes(b"payload")
+    adb.ADBService.local_md5_once(str(target))
+
+    stat = target.stat()
+    os.utime(str(target), (stat.st_atime + 10, stat.st_mtime + 10))
+    adb.ADBService.local_md5_once(str(target))
+
+    assert len(calls) == 2                           # 文件一变即重新计算

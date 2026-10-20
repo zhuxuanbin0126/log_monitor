@@ -26,7 +26,7 @@ import socket
 import struct
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import PROTOCOL_CONNECT_TIMEOUT, PROTOCOL_PORT, PROTOCOL_RECV_TIMEOUT
 from service.logging_service import get_logger
@@ -116,9 +116,13 @@ class FileDownloadState:
 
     用法：把收到的字节喂给 :meth:`feed`，把返回的帧立刻回给设备；
     结束后用 :meth:`download` 取结果。
+
+    **断点续传**：文件头应答 ``0x8002`` 携带 ``u64`` 起始偏移。若传入
+    ``resume_lookup``，状态机在收到文件头时会按其 md5 查询已有的部分数据，
+    并把偏移回给设备让它**从断点继续发**（设备只补发剩余字节）。
     """
 
-    def __init__(self):
+    def __init__(self, resume_lookup: Optional[Callable[[str], Optional[Tuple[int, bytes]]]] = None):
         self.buffer = bytearray()
         self.reply: Optional[dict] = None
         """解析出的 reply 对象（0x2104 JSON，可能分片重组）"""
@@ -127,6 +131,9 @@ class FileDownloadState:
         self.eof = False
         self._json_parts: Dict[int, bytes] = {}
         self._json_total = 0
+        self._resume_lookup = resume_lookup
+        self.resume_offset = 0
+        """本次实际向设备请求的起始偏移（0 表示从头传）"""
 
     def feed(self, chunk: bytes) -> List[bytes]:
         """追加字节流并处理其中的完整帧；返回需要回给设备的应答帧。"""
@@ -149,8 +156,18 @@ class FileDownloadState:
             return []
         if mtype == FT_FILE_HEAD:
             self.head = parse_file_head(body4)
-            # code=0 接受文件、offset=0 从头发送（断点续传可给非 0 偏移）
-            return [build_bin_frame(FT_FILE_HEAD_ACK, struct.pack("<HQ", 0, 0))]
+            offset = 0
+            if self._resume_lookup is not None and self.head.get("md5"):
+                found = self._resume_lookup(self.head["md5"])
+                if found:
+                    offset, existing = found
+                    if existing:
+                        self.data = bytearray(existing)
+                        self.resume_offset = len(existing)
+                        logger.info("文件通道命中断点续传：md5=%s 从偏移 %s 续传",
+                                    self.head["md5"], self.resume_offset)
+            # code=0 接受文件、offset=起始偏移（0=从头；>0=断点续传）
+            return [build_bin_frame(FT_FILE_HEAD_ACK, struct.pack("<HQ", 0, offset))]
         if mtype == FT_FILE_DATA:
             self.data += body4
             return []
@@ -195,33 +212,89 @@ class FileDownloadState:
 def receive_file(host: str, frame: bytes, *, port: int = PROTOCOL_PORT,
                  connect_timeout: float = PROTOCOL_CONNECT_TIMEOUT,
                  recv_timeout: float = PROTOCOL_RECV_TIMEOUT,
-                 tail_seconds: float = TAIL_SECONDS
+                 tail_seconds: float = TAIL_SECONDS,
+                 attempts: int = 1,
                  ) -> Tuple[Optional[dict], Optional[FileDownload]]:
     """发出一条请求帧，并按「文件下载」通道交互式收完整文件。
 
     与 :func:`service.protocol.client.send_request` 的「发→收→关」不同：设备推文件
     需要**边收边应答**（0x8002 / 0x8006 / 0x0060），否则会静默挂住。
 
+    ``attempts > 1`` 时启用**断点续传**：若上一轮已在同名（md5 相同）文件上收到
+    部分数据却未传完，下一轮会把该长度作为 ``0x8002`` 的起始偏移回给设备，
+    让它只补发剩余字节（内容已变（md5 不同）则自动改为从头重传）。
+
     Args:
         host: 设备 IP
         frame: 已构造好的请求帧（12 字节头 + JSON body，明文）
         port / connect_timeout / recv_timeout: 连接与总接收超时
         tail_seconds: 收到 0x8005 后再多等的小窗口（秒）
+        attempts: 传输尝试次数（>1 启用续传）
 
     Returns:
         ``(reply, download)``；reply 为 0x2104 JSON 的 ``reply`` 对象（无则 None），
         download 为文件下载结果（无则 None）。
     """
-    state = FileDownloadState()
-    with host_lock(host):
-        try:
-            with socket.create_connection((host, port), timeout=connect_timeout) as sock:
-                _handshake(sock)
-                sock.sendall(frame)
-                _pump(sock, state, recv_timeout, tail_seconds)
-        except OSError as exc:
-            logger.debug("文件下载通道 %s:%s 失败: %s", host, port, exc)
-    return state.reply, state.download()
+    attempts = max(1, int(attempts))
+    partial_md5 = ""
+    partial_bytes = b""
+    reply: Optional[dict] = None
+    download: Optional[FileDownload] = None
+
+    for attempt in range(1, attempts + 1):
+        resume_lookup = None
+        if partial_md5 and partial_bytes:
+            resume_lookup = _make_resume_lookup(partial_md5, partial_bytes)
+
+        state = FileDownloadState(resume_lookup=resume_lookup)
+        with host_lock(host):
+            try:
+                with socket.create_connection((host, port), timeout=connect_timeout) as sock:
+                    _handshake(sock)
+                    sock.sendall(frame)
+                    _pump(sock, state, recv_timeout, tail_seconds)
+            except OSError as exc:
+                logger.debug("文件下载通道 %s:%s 失败(第 %s 次): %s",
+                             host, port, attempt, exc)
+
+        reply = state.reply or reply
+        download = state.download()
+        if download is not None and download.ok and download.md5_match is not False:
+            return reply, download
+
+        if attempt < attempts:
+            partial_md5, partial_bytes = _resume_point(state)
+            if not partial_bytes:
+                logger.info("文件通道第 %s 次传输未拿到可续传的字节，重试将从头开始", attempt)
+    return reply, download
+
+
+def _resume_point(state: "FileDownloadState") -> Tuple[str, bytes]:
+    """从上一轮状态提取续传点 ``(md5, 已收字节)``；不可续传时返回空。"""
+    head = state.head or {}
+    md5 = head.get("md5") or ""
+    blob = bytes(state.data)
+    size = head.get("size") or 0
+    if not md5 or not blob:
+        return "", b""
+    if size and len(blob) > size:
+        # 设备忽略了偏移、从头重发 → 结果反而变长，续传点不可用
+        logger.info("文件通道已收 %s 字节 > 文件头声明 %s 字节，放弃该续传点",
+                    len(blob), size)
+        return "", b""
+    if size and len(blob) >= size:
+        return "", b""          # 已收全（失败应另有原因，续传无意义）
+    logger.info("文件通道续传点：md5=%s 已收 %s/%s 字节", md5, len(blob), size or "?")
+    return md5, blob
+
+
+def _make_resume_lookup(md5: str, blob: bytes):
+    """构造状态机的续传查询：仅当设备回的文件头 md5 与上次一致时才续传。"""
+    def _lookup(head_md5: str):
+        if head_md5 == md5:
+            return len(blob), blob
+        return None
+    return _lookup
 
 
 def _handshake(sock: socket.socket, greet_timeout: float = 0.15) -> None:

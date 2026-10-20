@@ -269,3 +269,133 @@ def test_receive_file_exits_early_on_non_success_reply(monkeypatch):
     assert reply["result"] == "kNotImplemented"
     assert download is None
     assert elapsed < 5.0, f"提前收尾失效，白等了 {elapsed:.1f}s"
+
+
+# ---------------------------------------------------------------- 断点续传
+
+def _ack_offset(reply_frame):
+    """从 0x8002 应答帧里取 u64 起始偏移（4 字节头 + u16 code + u64 offset）。"""
+    return struct.unpack_from("<Q", reply_frame, 6)[0]
+
+
+def test_state_adopts_resume_offset_from_lookup():
+    state = fr.FileDownloadState(resume_lookup=lambda _md5: (5, b"OLDXX"))
+    replies = state.feed(_head_frame("c" * 32, 10, "s.png"))
+
+    assert state.resume_offset == 5
+    assert state.data == bytearray(b"OLDXX")
+    assert _ack_offset(replies[0]) == 5
+
+
+def test_state_ignores_lookup_result_when_md5_differs():
+    def lookup(head_md5):
+        return (3, b"ABC") if head_md5 == "d" * 32 else None
+
+    state = fr.FileDownloadState(resume_lookup=lookup)
+    replies = state.feed(_head_frame("e" * 32, 8, "s.png"))
+
+    assert state.resume_offset == 0
+    assert state.data == bytearray()
+    assert _ack_offset(replies[0]) == 0
+
+
+def test_resume_point_returns_partial_bytes():
+    md5 = "a" * 32
+    state = fr.FileDownloadState()
+    state.feed(_head_frame(md5, 10, "s.png"))
+    state.feed(_data_frame(b"1234"))
+
+    assert fr._resume_point(state) == (md5, b"1234")   # pylint: disable=protected-access
+
+
+def test_resume_point_rejects_oversized_data():
+    """设备忽略偏移、从头重发导致数据变长 → 不可续传。"""
+    state = fr.FileDownloadState()
+    state.feed(_head_frame("f" * 32, 4, "s.png"))
+    state.feed(_data_frame(b"123456"))
+
+    assert fr._resume_point(state) == ("", b"")        # pylint: disable=protected-access
+
+
+class _ResumableDevice:
+    """第 1 次连接只发一部分就断开；第 2 次连接按 0x8002 给出的偏移补发剩余。"""
+
+    def __init__(self, payload, drop_ratio=0.5):
+        self.payload = payload
+        self.md5 = hashlib.md5(payload).hexdigest()
+        self.first_bytes = max(1, int(len(payload) * drop_ratio))
+        self.offsets = []
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(2)
+        self.port = self._sock.getsockname()[1]
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    @staticmethod
+    def _recv_exact(conn, size):
+        buf = b""
+        while len(buf) < size:
+            piece = conn.recv(size - len(buf))
+            if not piece:
+                break
+            buf += piece
+        return buf
+
+    def _read_frame_head(self, conn):
+        head = self._recv_exact(conn, 4)
+        frame_len = struct.unpack("<H", head[:2])[0]
+        body = self._recv_exact(conn, frame_len - 4) if frame_len > 4 else b""
+        return struct.unpack("<H", head[2:4])[0], body
+
+    def _serve(self):
+        for attempt in range(2):
+            try:
+                conn, _ = self._sock.accept()
+            except OSError:
+                return
+            conn.settimeout(5)
+            try:
+                self._read_frame_head(conn)                  # 请求帧
+                conn.sendall(_json_frame(
+                    {"module": "ReadBack",
+                     "reply": {"data": {"ScreenShot": self.md5}, "result": "kSuccess"}}))
+                conn.sendall(_head_frame(self.md5, len(self.payload), "shot.png"))
+
+                _mtype, ack_body = self._read_frame_head(conn)   # 0x8002
+                offset = struct.unpack_from("<Q", ack_body, 2)[0]
+                self.offsets.append(offset)
+
+                if attempt == 0:
+                    conn.sendall(_data_frame(self.payload[offset:offset + self.first_bytes]))
+                    conn.close()                                 # 故意不发 0x8005
+                    continue
+                chunk = self.payload[offset:]
+                for index in range(0, len(chunk), 8192):
+                    conn.sendall(_data_frame(chunk[index:index + 8192]))
+                conn.sendall(_eof_frame())
+                self._read_frame_head(conn)                      # 0x8006
+                conn.close()
+            except OSError:
+                return
+
+
+def test_receive_file_resumes_from_partial_offset():
+    payload = b"\x89PNG\r\n\x1a\n" + b"0123456789" * 1000
+    device = _ResumableDevice(payload)
+    device.start()
+
+    frame = build_frame(build_readback_message(
+        "ScreenShot", file_transfer_mode=2), TYPE_REQUEST)
+    _, download = fr.receive_file(
+        "127.0.0.1", frame, port=device.port, connect_timeout=2.0,
+        recv_timeout=5.0, tail_seconds=0.2, attempts=2)
+
+    assert download is not None
+    assert download.data == payload
+    assert download.md5_match is True
+    # 第 1 次从 0 开始；第 2 次从已收字节处续传（设备只补发剩余）
+    assert device.offsets == [0, device.first_bytes]

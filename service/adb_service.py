@@ -4,7 +4,9 @@
 """ADB 设备服务 - 负责所有与 Android 设备通过 ADB 的交互操作"""
 
 import os
+import threading
 import time
+from typing import Dict, Optional, Tuple
 
 from .device_utils import (
     ADB_PATH, get_tool_path, run_command, calculate_md5, TOOLS_DIR,
@@ -16,9 +18,46 @@ from .protocol.set_query import ADB_MODE_BOTH, ADB_TIMER_ON, set_development
 
 logger = get_logger(__name__)
 
+_LOCAL_MD5_MEMO: Dict[Tuple[str, int, int], str] = {}
+"""本地文件 MD5 备忘：``(绝对路径, 大小, mtime) -> md5``。
+
+「同一内容发给多台设备」时只需读一次文件、算一次 MD5（批量发送节目场景收益明显）。
+键含大小与 mtime，文件一变即自动失效。
+"""
+_LOCAL_MD5_MEMO_LIMIT = 64
+_LOCAL_MD5_LOCK = threading.Lock()
+
+
 
 class ADBService:
     """ADB 设备操作服务类，封装所有 ADB 命令交互"""
+
+    @staticmethod
+    def local_md5_once(local_file: str) -> Optional[str]:
+        """本地文件 MD5，**同内容只算一次**（路径+大小+mtime 命中即复用）。
+
+        批量把同一个节目/脚本推给几十台设备时，避免对同一文件重复读盘与哈希；
+        文件被修改后（大小或 mtime 变化）自动重新计算。
+        """
+        try:
+            stat = os.stat(local_file)
+            key = (os.path.abspath(local_file), stat.st_size, int(stat.st_mtime))
+        except OSError:
+            return calculate_md5(local_file)
+
+        with _LOCAL_MD5_LOCK:
+            cached = _LOCAL_MD5_MEMO.get(key)
+        if cached:
+            logger.debug("[同内容优化] 复用已计算的本地 MD5: %s", local_file)
+            return cached
+
+        digest = calculate_md5(local_file)
+        if digest:
+            with _LOCAL_MD5_LOCK:
+                if len(_LOCAL_MD5_MEMO) >= _LOCAL_MD5_MEMO_LIMIT:
+                    _LOCAL_MD5_MEMO.clear()
+                _LOCAL_MD5_MEMO[key] = digest
+        return digest
 
     @staticmethod
     def root_device(serial):
@@ -366,7 +405,7 @@ class ADBService:
         if not os.path.exists(local_file):
             return "", f"本地文件不存在: {local_file}", -1
 
-        local_md5 = calculate_md5(local_file)
+        local_md5 = ADBService.local_md5_once(local_file)
         if not local_md5:
             return "", "无法计算本地文件MD5", -2
 

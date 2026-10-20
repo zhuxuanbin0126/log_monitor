@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 
 from config import (
     PROTOCOL_CONNECT_TIMEOUT, PROTOCOL_FILE_RECV_TIMEOUT, PROTOCOL_PORT,
-    PROTOCOL_RECV_TIMEOUT,
+    PROTOCOL_RECV_TIMEOUT, TRANSFER_MAX_ATTEMPTS,
 )
 from service.logging_service import get_logger
 
@@ -66,11 +66,13 @@ def query_screenshot(host: str, *, port: int = PROTOCOL_PORT,
         READBACK_TARGET_SCREENSHOT, SCREENSHOT_FILE_OPTIONS,
         file_transfer_mode=FILE_TRANSFER_MODE_SOCKET)
     frame = build_frame(message, TYPE_REQUEST)
-    logger.info("设备 %s 尝试协议截图（ReadBack ScreenShot/%s）", host, frame[:4].hex())
+    logger.info("设备 %s 尝试协议截图（ReadBack ScreenShot/%s），最多 %s 次（第 2 次可断点续传）",
+                host, frame[:4].hex(), TRANSFER_MAX_ATTEMPTS)
     reply, download = receive_file(host, frame, port=port,
                                    connect_timeout=connect_timeout,
                                    recv_timeout=max(recv_timeout,
-                                                    PROTOCOL_FILE_RECV_TIMEOUT))
+                                                    PROTOCOL_FILE_RECV_TIMEOUT),
+                                   attempts=TRANSFER_MAX_ATTEMPTS)
 
     if download is None or not download.ok:
         logger.info("设备 %s 协议截图失败: result=%s, 文件数据=%s",
