@@ -124,6 +124,13 @@ QUERY_MAX_WORKERS = 8
 LEGACY_QUERY_MAX_WORKERS = 2
 """无协议设备（走 adb/SSH）的最大并发数：adb server 为单进程，过高会相互干扰"""
 
+LINUX_SSH_MAX_WORKERS = 3
+"""Linux 机型（C08L/C16L/D16/D36/Q910）的 SSH 并发上限。
+
+这些设备只有 SSH 一条通道，每台是**独立连接**（paramiko 连接池按 host 隔离），
+并发 3 台即可消除「2~3 台 Linux 设备排队」的成倍等待；再高收益递减，
+而现场设备多为低配 ARM，小并发更稳。"""
+
 SCREENSHOT_MAX_WORKERS = 16
 """协议截图的最大并发数。
 

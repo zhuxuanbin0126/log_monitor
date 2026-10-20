@@ -10,7 +10,8 @@ from service.logging_service import get_logger
 from service.protocol import get_device_status
 from service.task_control import GLOBAL_TASK
 from config import (
-    LEGACY_QUERY_MAX_WORKERS, QUERY_MAX_WORKERS, SCREENSHOT_MAX_WORKERS,
+    LEGACY_QUERY_MAX_WORKERS, LINUX_SSH_MAX_WORKERS, QUERY_MAX_WORKERS,
+    SCREENSHOT_MAX_WORKERS,
 )
 from business.query_dispatcher import build_query_dispatch
 
@@ -127,43 +128,34 @@ class SerialQueryManager(QThread):
             ssh_devices = [d for d in self.devices_info if not is_android_device(d[0])]
 
             protocol_devices, legacy_devices = self._split_by_protocol(android_devices)
+            ssh_limit = min(len(ssh_devices), LINUX_SSH_MAX_WORKERS) or 0
             logger.info(
-                "[串行管理器] 查询类型=%s，共 %s 台：协议池 %s 台（并发 %s）、"
-                "adb/SSH 池 %s 台（并发 %s）、SSH 串行 %s 台",
+                "[任务管理器] 查询类型=%s，共 %s 台：协议池 %s 台（并发 %s）、"
+                "adb/SSH 池 %s 台（并发 %s）、Linux SSH 池 %s 台（并发 %s）",
                 self.query_type, total_devices, len(protocol_devices),
                 self._protocol_limit(len(protocol_devices)) or 0,
                 len(legacy_devices),
                 min(len(legacy_devices), LEGACY_QUERY_MAX_WORKERS) or 0,
-                len(ssh_devices),
+                len(ssh_devices), ssh_limit,
             )
 
             # 协议池：每台设备独立 TCP，可安全高并发
             if protocol_devices:
                 self._process_parallel(protocol_devices, total_devices,
-                                       self._protocol_limit(len(protocol_devices)))
+                                       self._protocol_limit(len(protocol_devices)),
+                                       base=0)
 
             # legacy 池：走 adb/SSH，adb server 单进程，低并发避免相互干扰
             if legacy_devices:
                 self._process_parallel(legacy_devices, total_devices,
-                                      min(len(legacy_devices), LEGACY_QUERY_MAX_WORKERS))
+                                       min(len(legacy_devices), LEGACY_QUERY_MAX_WORKERS),
+                                       base=len(protocol_devices))
 
-            # Linux 设备：SSH 串行
-            base = len(protocol_devices) + len(legacy_devices)
-            for idx, device_info in enumerate(ssh_devices):
-                if self._should_stop():
-                    break
-                device_id, ip, password, system_type = device_info
-                logger.info(
-                    "[串行管理器] 开始处理设备 %s/%s: %s (%s)",
-                    idx + 1 + base, total_devices, device_id, ip)
-                self._set_state(self.STATE_CONNECTING, device_id)
-                GLOBAL_TASK.set_current(f"{device_id} ({ip})")
-                self.progress_signal.emit(idx + 1 + base, total_devices)
-                try:
-                    self._process_single_device(device_id, ip, password, system_type,
-                                                needs_adb=False)
-                finally:
-                    GLOBAL_TASK.mark_done(device_info)
+            # Linux 设备：SSH 并发（每台一条独立连接，小并发即够且互不干扰）
+            if ssh_devices:
+                self._process_parallel(
+                    ssh_devices, total_devices, ssh_limit,
+                    base=len(protocol_devices) + len(legacy_devices))
 
             self.finished_signal.emit(total_devices)
 
@@ -196,23 +188,31 @@ class SerialQueryManager(QThread):
             try:
                 supported = get_device_status(ip) is not None
             except Exception as exc:  # pylint: disable=broad-except
-                logger.debug("[串行管理器] 协议支持面判定失败 %s: %s", ip, exc)
+                logger.debug("[任务管理器] 协议支持面判定失败 %s: %s", ip, exc)
                 supported = False
             (protocol_devices if supported else legacy_devices).append(device)
         return protocol_devices, legacy_devices
 
-    def _process_parallel(self, devices, total_devices, workers):
+    def _process_parallel(self, devices, total_devices, workers, base=0):
         """**滑动窗口**并发处理一批设备（完成一台立刻补一台）。
 
         旧实现按 8 台分组、组间串行：组里只要有一台慢设备（协议超时后降级 adb，
         单台 15~17s），后面所有设备都要干等 —— 实测第 9 台要多等 8s。
         现在并发上限仍受控（端口/连接数不放大），但不再有「整组等待」。
+
+        ``base`` 为前序池已完成的台数，用于把进度信号折算成全局 ``x/total``。
         """
         completed = [0]
-        completed_lock = threading.Lock()
+        started = [0]
+        counter_lock = threading.Lock()
 
         def _handle_device(device_info):
             device_id, ip, password, system_type = device_info
+            with counter_lock:
+                started[0] += 1
+                index = base + started[0]
+            logger.info("[任务管理器] 开始处理设备 %s/%s: %s (%s)",
+                        index, total_devices, device_id, ip)
             self._set_state(self.STATE_CONNECTING, device_id)
             GLOBAL_TASK.set_current(f"{device_id} ({ip})")
             try:
@@ -220,9 +220,9 @@ class SerialQueryManager(QThread):
                                             needs_adb=is_android_device(device_id))
             finally:
                 GLOBAL_TASK.mark_done(device_info)
-                with completed_lock:
+                with counter_lock:
                     completed[0] += 1
-                    current = completed[0]
+                    current = base + completed[0]
                 self.progress_signal.emit(current, total_devices)
             return device_id
 
@@ -231,7 +231,7 @@ class SerialQueryManager(QThread):
             max_workers=workers,
             should_stop=self._should_stop,
             on_dispatch=lambda dispatched, total: logger.info(
-                "[串行管理器] 已派发 %s/%s 台（并发上限 %s）", dispatched, total, workers),
+                "[任务管理器] 已派发 %s/%s 台（并发上限 %s）", dispatched, total, workers),
         )
 
     def _should_stop(self):
@@ -247,7 +247,7 @@ class SerialQueryManager(QThread):
         try:
             return get_device_status(ip) is not None
         except Exception as exc:  # pylint: disable=broad-except
-            logger.debug("[串行管理器] 协议支持面判定失败 %s: %s", ip, exc)
+            logger.debug("[任务管理器] 协议支持面判定失败 %s: %s", ip, exc)
             return False
 
     def _process_single_device(self, device_id, ip, password, system_type, needs_adb=False):
@@ -258,14 +258,14 @@ class SerialQueryManager(QThread):
         """
         protocol_ready = self._protocol_ready(device_id, ip)
         if protocol_ready:
-            logger.info("[串行管理器] %s(%s) 协议可用，跳过 adb/SSH 前置", device_id, ip)
+            logger.info("[任务管理器] %s(%s) 协议可用，跳过 adb/SSH 前置", device_id, ip)
         elif is_android_device(device_id):
             try:
                 # 只断开**本设备**的 adb 连接：并行处理多台设备时，
                 # 全局 `adb disconnect` 会误伤其它正在查询的设备
                 ADBService.disconnect_device(ip)
             except Exception as e:
-                logger.warning("[串行管理器] 断开设备 %s 的ADB连接时出错: %s", ip, e)
+                logger.warning("[任务管理器] 断开设备 %s 的ADB连接时出错: %s", ip, e)
             self.msleep(300)
         # 非 Android（Linux/SSH）设备无需 adb 断开与等待
 
@@ -279,7 +279,7 @@ class SerialQueryManager(QThread):
                 # Android 设备：检测/开启网络 ADB（仅协议不可用时才需要）
                 self._set_state(self.STATE_CONNECTING, device_id)
                 prev_status = ADBDeviceManager.get_cached_status(device_id)
-                logger.info("[串行管理器] %s 协议不可用，尝试确保网络 ADB 已开启", device_id)
+                logger.info("[任务管理器] %s 协议不可用，尝试确保网络 ADB 已开启", device_id)
                 adb_ok, serial = ADBDeviceManager.ensure_adb_connected(ip, password, device_id)
                 # 通知 UI 更新 ADB 状态
                 self.state_signal.emit(device_id, f"ADB:{'开启' if adb_ok else '未开启'}")
@@ -291,7 +291,7 @@ class SerialQueryManager(QThread):
             # 只有真的回退到 plink/pscp 且报「密钥未缓存」时才就地接受一次。
 
             self._set_state(self.STATE_QUERYING)
-            logger.info("[串行管理器] %s 开始执行查询（类型=%s，通道=%s）",
+            logger.info("[任务管理器] %s 开始执行查询（类型=%s，通道=%s）",
                         device_id, self.query_type,
                         "协议" if protocol_ready else "adb/SSH")
 
@@ -309,7 +309,7 @@ class SerialQueryManager(QThread):
             else:
                 dispatch[self.query_type]()
 
-            logger.info("[串行管理器] %s 查询完成，结果键=%s", device_id, sorted(results.keys()))
+            logger.info("[任务管理器] %s 查询完成，结果键=%s", device_id, sorted(results.keys()))
             self._set_state(self.STATE_DONE)
             self.result_signal.emit(device_id, results)
 
@@ -328,7 +328,7 @@ class SerialQueryManager(QThread):
                     # 同上：并行场景下只断开本设备，避免误伤其它设备
                     ADBService.disconnect_device(ip)
                 except Exception as e:
-                    logger.warning("[串行管理器] 设备 %s 操作完成后断开ADB连接时出错: %s", device_id, e)
+                    logger.warning("[任务管理器] 设备 %s 操作完成后断开ADB连接时出错: %s", device_id, e)
 
     def _start_info_refresher(self, device_id, ip, password):
         """启动后台线程刷新设备信息，并通过信号通知 UI"""

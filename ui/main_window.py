@@ -642,7 +642,7 @@ class MainWindow(BaseWindow):
                         device_info.get('password', ''),
                         device_info.get('system_type', '')))
         
-        # 如果存在串行管理器，停止它
+        # 如果存在任务管理器，停止它
         if self.serial_manager and self.serial_manager.isRunning():
             self.serial_manager.stop()
             self.serial_manager.wait()
@@ -697,7 +697,7 @@ class MainWindow(BaseWindow):
             custom_file_paths = dialog.get_file_paths()
             self.log(f"发送节目确认完成，使用自定义文件路径: {custom_file_paths}")
         
-        # 使用串行管理器执行
+        # 使用任务管理器执行
         self.serial_manager = SerialQueryManager(
             devices_to_process, 
             query_type, 
@@ -854,7 +854,7 @@ class MainWindow(BaseWindow):
             f"剩余 {len(remaining)} 台，可点击「继续执行上一个任务」从断点继续", stamp=True)
 
     def on_task_progress(self, done, total):
-        """串行管理器每完成一台就回报：刷新「正在执行 x/y」提示。"""
+        """任务管理器每完成一台就回报：刷新「正在执行 x/y」提示。"""
         snapshot = GLOBAL_TASK.snapshot()
         op_text = self.query_presenter.query_type_text(
             snapshot.get('label') or self.current_query_type or '')
@@ -870,7 +870,7 @@ class MainWindow(BaseWindow):
     def interrupt_tasks(self):
         """中断**所有**正在执行的耗时任务（不关闭应用、不强杀线程）。
 
-        覆盖：查询/截图/文件推送（串行管理器，走 ``GLOBAL_TASK``）、批量开启 ADB、
+        覆盖：查询/截图/文件推送（任务管理器，走 ``GLOBAL_TASK``）、批量开启 ADB、
         清理历史数据、监控。每个任务都在**安全边界**退出（两台设备之间 / 两个条目之间），
         正在处理的当台当条正常收尾，因此各自的结果仍能正常汇总。
         """

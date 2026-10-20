@@ -123,3 +123,68 @@ def test_set_time_unreachable_device():
                            connect_timeout=0.2, recv_timeout=0.2)
     assert ok is False
     assert "无响应" in message
+
+
+# ---------------------------------------------------------------- Linux：SSH 直接设时
+
+def _service():
+    """不跑 __init__（避免建目录/读数据），只测设时编排本身。"""
+    from business.device_monitor_service import DeviceMonitorService
+    return DeviceMonitorService.__new__(DeviceMonitorService)
+
+
+def test_parse_utc_offset():
+    service = _service()
+    assert service._parse_utc_offset("+0800") == timedelta(hours=8)
+    assert service._parse_utc_offset("-0530") == -timedelta(hours=5, minutes=30)
+    assert service._parse_utc_offset("") is None
+    assert service._parse_utc_offset("CST") is None
+
+
+def test_set_time_over_ssh_sets_local_time_and_verifies(monkeypatch):
+    import time as time_module
+    import business.device_monitor_service as dms
+
+    calls = []
+
+    def fake_execute(_device_id, _ip, _password, command, _base_dir="."):
+        calls.append(command)
+        if command.strip() == "date +%z":
+            return "+0800", "", 0
+        return f"{int(time_module.time())}", "", 0
+
+    monkeypatch.setattr(dms.ToolService, "execute_command", fake_execute)
+
+    result = _service()._set_time_over_ssh("192.168.80.212", "pwd", "C16L-D24-0F308")
+
+    assert result is not None and result.success is True
+    assert "SSH" in result.data
+    # 第一条取时区偏移，第二条一次完成 设时 + 写 RTC + 回读
+    assert calls[0].strip() == "date +%z"
+    assert "date -s" in calls[1]
+    assert "hwclock -w" in calls[1]
+    assert "date +%s" in calls[1]
+
+
+def test_set_time_over_ssh_rejects_when_clock_did_not_change(monkeypatch):
+    import time as time_module
+    import business.device_monitor_service as dms
+
+    def fake_execute(_device_id, _ip, _password, command, _base_dir="."):
+        if command.strip() == "date +%z":
+            return "+0800", "", 0
+        # 回读仍是 1 小时前 → 判定未生效，交给 ntpdate 兜底
+        return f"{int(time_module.time()) - 3600}", "", 0
+
+    monkeypatch.setattr(dms.ToolService, "execute_command", fake_execute)
+
+    assert _service()._set_time_over_ssh("192.168.80.212", "pwd", "C16L-D24-0F308") is None
+
+
+def test_set_time_over_ssh_without_timezone_gives_up(monkeypatch):
+    import business.device_monitor_service as dms
+
+    monkeypatch.setattr(dms.ToolService, "execute_command",
+                        lambda *a, **k: ("", "not found", 127))
+
+    assert _service()._set_time_over_ssh("192.168.80.212", "pwd", "C16L-D24-0F308") is None

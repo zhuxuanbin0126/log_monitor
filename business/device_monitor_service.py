@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 import os
 import threading
@@ -223,14 +223,20 @@ class DeviceMonitorService:
         """导出开关机日志"""
         return DeviceLogService.switch_log_output(ip, password, device_id, system_type, path)
     def ntptime_checkout_time(self, ip, password, device_id, system_type):
-        """设置设备时间（协议 Set Time 优先，失败回落 ntpdate 推送）。
+        """设置设备时间。
 
-        协议校时的 ``dateTime`` 为 **UTC-0** 墙钟（见 ``service/protocol/set_time``），
-        时区由 ``timeZone`` 声明为北京时间；因此免推 ntpdate、免 SSH，也不依赖
-        设备能否访问外网 NTP。
+        - **Android**：协议 ``Set Time`` 优先（``dateTime`` 为 UTC-0 墙钟，时区由
+          ``timeZone`` 声明），失败回落 ntpdate 推送；
+        - **Linux**：只有 SSH 一条通道，且这些机型本就不支持协议 —— 因此**不做协议探测**
+          （省掉每次约 1.7s 的白等），改为**以本机时钟为基准**、一条 SSH 直接
+          ``date -s`` + ``hwclock -w`` 并回读 epoch 校验：免推 ntpdate、免等外网 NTP
+          （现场设备常访问不到 ``ntp.huidu.cn``），实测单台从约 9s 降到约 1s。
+          ``date -s`` 失败或回读 epoch 偏差过大时才回落 ntpdate。
         """
-        # ---- 协议优先：Set Time（免 adb/SSH、免外网） ----
-        if USE_PROTOCOL_QUERY:
+        is_android = ToolService.is_android_device(device_id)
+
+        # ---- Android：协议优先（免 adb/SSH、免外网） ----
+        if USE_PROTOCOL_QUERY and is_android:
             try:
                 ok, msg = protocol_set_time(ip)
             except Exception as exc:  # pylint: disable=broad-except
@@ -241,9 +247,16 @@ class DeviceMonitorService:
                     True, data=f"{device_id} 时间已校时成功（协议），本机时间为：{local_now}")
             logger.info("设备 %s 协议校时不可用（%s），回落 ntpdate 推送", device_id, msg)
 
+        # ---- Linux：SSH 直接设时（以本机时钟为准） ----
+        if not is_android:
+            result = self._set_time_over_ssh(ip, password, device_id)
+            if result is not None:
+                return result
+            logger.info("设备 %s SSH 直接设时未生效，回落 ntpdate 推送", device_id)
+
         try:
             remote_file = ""
-            if ToolService.is_android_device(device_id):
+            if is_android:
                 remote_file = "/system/bin/ntpdate"
                 stdout, stderr, returncode = ToolService.push_file(device_id, ip, password, f"{tool_path}/ntpdate", remote_file, use_reliable=True)
                 if stderr or returncode != 0:
@@ -266,6 +279,68 @@ class DeviceMonitorService:
             return OperationResult(True, data=f"{device_id} 时间已校时成功，时间为：{stdout}")
         except Exception as e:
             return OperationResult(False, error=f"{device_id} 设置时间失败 - {str(e)}")
+
+    TIME_VERIFY_TOLERANCE_SECONDS = 30
+    """SSH 设时后允许的 epoch 偏差（秒）：超过即判定未生效，回落 ntpdate"""
+
+    def _set_time_over_ssh(self, ip, password, device_id):
+        """Linux 校时：以本机时钟为基准，两次 SSH 往返完成设时并校验。
+
+        1. ``date +%z`` 取设备时区偏移（设时要用**设备本地时间**，否则 epoch 会偏）；
+        2. ``date -s`` 设系统时间（失败则用 ``MMDDhhmmYYYY.ss`` 老格式再试一次）
+           → ``hwclock -w`` 写 RTC → ``date +%s`` 回读 epoch 校验。
+
+        Returns:
+            成功返回 :class:`OperationResult`；未生效返回 ``None``（交调用方走 ntpdate 兜底）。
+        """
+        try:
+            offset_text, _, _ = ToolService.execute_command(
+                device_id, ip, password, "date +%z", ".")
+            offset = self._parse_utc_offset(offset_text)
+            if offset is None:
+                logger.info("设备 %s 读不到时区偏移（%r），无法直设时间", device_id, offset_text)
+                return None
+
+            target = datetime.now(timezone.utc) + offset
+            stamp = target.strftime('%Y-%m-%d %H:%M:%S')
+            legacy_stamp = target.strftime('%m%d%H%M%Y.%S')
+            command = (
+                f'date -s "{stamp}" >/dev/null 2>&1 || date {legacy_stamp} >/dev/null 2>&1; '
+                f'hwclock -w >/dev/null 2>&1; '
+                f'date +%s'
+            )
+            stdout, stderr, _ = ToolService.execute_command(
+                device_id, ip, password, command, ".")
+
+            epoch_text = (stdout or "").strip().splitlines()
+            epoch = int(epoch_text[-1].strip()) if epoch_text else None
+            if epoch is None:
+                logger.info("设备 %s 设时后回读 epoch 失败（%r / %r）",
+                            device_id, stdout, stderr)
+                return None
+
+            skew = abs(epoch - int(time.time()))
+            if skew > self.TIME_VERIFY_TOLERANCE_SECONDS:
+                logger.info("设备 %s 设时后 epoch 偏差 %ss（阈值 %ss），判定未生效",
+                            device_id, skew, self.TIME_VERIFY_TOLERANCE_SECONDS)
+                return None
+
+            shown = datetime.fromtimestamp(epoch, tz=BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')
+            logger.info("设备 %s SSH 校时成功（偏差 %ss，设备显示 %s）", device_id, skew, shown)
+            return OperationResult(
+                True, data=f"{device_id} 时间已校时成功（SSH），时间为：{shown}")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.info("设备 %s SSH 直接设时异常（%s），回落 ntpdate", device_id, exc)
+            return None
+
+    @staticmethod
+    def _parse_utc_offset(text):
+        """``+0800`` / ``-0530`` → :class:`datetime.timedelta`；无法解析返回 None。"""
+        match = re.match(r'^\s*([+-])(\d{2})(\d{2})\s*$', text or "")
+        if not match:
+            return None
+        sign = -1 if match.group(1) == '-' else 1
+        return sign * timedelta(hours=int(match.group(2)), minutes=int(match.group(3)))
 
     def upgrade_program(self, ip, password, device_id, system_type, custom_file_paths=None):
         """
