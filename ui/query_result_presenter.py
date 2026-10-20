@@ -127,7 +127,7 @@ class QueryResultPresenter:
             if na_list:
                 names = ", ".join(device_id for device_id, _fields in na_list)
                 self._log(f"  不适用: {len(na_list)} 台 - {names}"
-                          f"（Linux 设备无播放器概念，启动次数不计入失败）",
+                          f"（Linux 设备无播放器）",
                           is_warning=True)
             self._log(f"  查询失败: {fail_count} 台")
             if failed:

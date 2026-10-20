@@ -47,6 +47,7 @@ class DeviceRefreshController(QObject):
         self._submitted = set()
         self._submit_done = False
         self._incremental = False
+        self._stopped = False
         self._logger = get_logger(__name__)
 
     # ---------------------------------------------------------------- 全量刷新
@@ -60,6 +61,7 @@ class DeviceRefreshController(QObject):
                 ``None`` 或空表示全网找卡（UDP 广播 / DeviceId.exe）。
         """
         self.stop()
+        self._stopped = False
         self._dev_type = dev_type
         self._devices = []
         self._submitted = set()
@@ -91,6 +93,7 @@ class DeviceRefreshController(QObject):
         if not pairs:
             return
 
+        self._stopped = False
         self._devices = []
         self._submitted = set()
         self._submit_done = True          # 无扫描阶段，只有补全
@@ -111,7 +114,8 @@ class DeviceRefreshController(QObject):
         return GetDeviceListThread(dev_type=dev_type, tools_dir=TOOLS_DIR, timeout=60)
 
     def stop(self) -> None:
-        """停止扫描与线程池。"""
+        """停止扫描与线程池（关窗时调用：必须排空后台任务后才能真正释放）。"""
+        self._stopped = True
         self._stop_manager()
         if self._thread and self._thread.isRunning():
             self._thread.stop()
@@ -134,18 +138,21 @@ class DeviceRefreshController(QObject):
         self._manager.allTasksCompleted.connect(self._on_all_tasks_completed)
 
     def _stop_manager(self) -> None:
-        if not self._manager:
+        manager = self._manager
+        if not manager:
             return
+        self._manager = None
+        # **先排空再断开**：后台任务仍在跑时直接丢弃 manager，
+        # 会让它们向已释放的 QObject 发信号 → 关窗瞬间进程崩溃（0xC0000005）
         try:
-            self._manager.check_timer.stop()
+            manager.stop(5000)
         except Exception:  # pylint: disable=broad-except
             pass
-        for signal in (self._manager.taskCompleted, self._manager.allTasksCompleted):
+        for signal in (manager.taskCompleted, manager.allTasksCompleted):
             try:
                 signal.disconnect()
             except Exception:  # pylint: disable=broad-except
                 pass
-        self._manager = None
 
     def _accepts_device(self, device_id: str) -> bool:
         """与找卡层同口径过滤：型号受支持且匹配当前设备类型。"""
@@ -180,6 +187,8 @@ class DeviceRefreshController(QObject):
         self._submit_done = True
 
     def _on_device_info(self, device_info) -> None:
+        if self._stopped:
+            return
         if device_info:
             self._devices.append(device_info)
             # 增量更新：每台设备详情到位就立即上报，不必等 allTasksCompleted
@@ -187,7 +196,7 @@ class DeviceRefreshController(QObject):
 
     def _on_all_tasks_completed(self) -> None:
         # 扫描未结束时的瞬时空闲不算收尾（否则会拿到不完整的设备列表）
-        if not self._submit_done:
+        if self._stopped or not self._submit_done:
             return
         self._stop_manager()
         if self._incremental:

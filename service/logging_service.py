@@ -39,6 +39,13 @@ def _configure() -> None:
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
 
+    # paramiko 的内部传输线程与第三方库的告警：程序退出时 socket 被关闭，
+    # 它会往控制台抛「Exception (client): Error reading SSH protocol banner
+    # [WinError 10038]」之类的噪音（不影响功能，但看起来像崩溃）。
+    # 这里把这些第三方 logger 压到 CRITICAL，只保留我们自己的业务日志。
+    for noisy in ("paramiko", "paramiko.transport", "paramiko.transport.sftp"):
+        logging.getLogger(noisy).setLevel(logging.CRITICAL)
+
     _configured = True
 
 

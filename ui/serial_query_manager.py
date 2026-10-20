@@ -316,3 +316,16 @@ class SerialQueryManager(QThread):
         """停止执行"""
         self.is_running = False
 
+    @classmethod
+    def stop_refreshers(cls, timeout_ms=3000):
+        """等待查询期间拉起的「设备信息刷新」线程收尾（关窗时调用）。
+
+        这些 QThread 没有父对象、只由类级集合持有引用；若窗口先被销毁而线程仍在跑，
+        解释器退出时会触发 ``QThread: Destroyed while thread is still running``。
+        """
+        for refresher in list(cls._active_refreshers):
+            try:
+                refresher.wait(timeout_ms)
+            except Exception:  # pylint: disable=broad-except
+                pass
+

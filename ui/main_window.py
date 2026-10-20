@@ -881,6 +881,15 @@ class MainWindow(BaseWindow):
         self.stop_monitor()
         self.refresh_controller.stop()
         self.background_discovery.stop()
+        # 查询线程若不在此停下，窗口销毁时它还在跑 → QThread 被析构 → 进程崩溃
+        if self.serial_manager and self.serial_manager.isRunning():
+            self.serial_manager.stop()
+            self.serial_manager.wait(5000)
+        # 查询期间异步拉起的设备信息刷新线程同样要等它收尾
+        try:
+            SerialQueryManager.stop_refreshers(3000)
+        except Exception:  # pylint: disable=broad-except
+            pass
         if self.enable_adb_worker and self.enable_adb_worker.isRunning():
             self.enable_adb_worker.stop()
             self.enable_adb_worker.wait()
