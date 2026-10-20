@@ -1,10 +1,18 @@
-"""监控结果 Excel 导出。"""
+"""监控结果 Excel 导出（**仅依赖 openpyxl**）。
+
+为什么不用 pandas：本项目只做「追加行 + 自适应列宽」这一件事，pandas 会连带
+numpy 一起进打包（约 40~60MB），对离线分发的体积影响远大于收益。openpyxl 已
+是 requirements 的依赖，直接读写即可，行为与旧实现一致。
+"""
 
 import os
 from datetime import datetime
 
 from config import EXCEL_DIR
 from service.logging_service import get_logger
+
+MAX_COLUMN_WIDTH = 50
+"""列宽上限（与旧实现一致）"""
 
 
 class ExcelExporter:
@@ -26,9 +34,10 @@ class ExcelExporter:
         format_time 用于把启动时间格式化为分钟精度。
         """
         try:
-            import pandas as pd
+            from openpyxl import Workbook, load_workbook
         except ImportError:
-            self._log("导出Excel失败：未找到pandas模块。请运行 'pip install pandas' 安装依赖", is_error=True)
+            self._log("导出Excel失败：未找到openpyxl模块。请运行 'pip install openpyxl' 安装依赖",
+                      is_error=True)
             return ""
 
         try:
@@ -68,8 +77,15 @@ class ExcelExporter:
             if not rows:
                 return self.excel_file
 
-            df = pd.DataFrame(rows)
-            self._write_frame(pd, df)
+            file_exists = os.path.exists(self.excel_file)
+            workbook = load_workbook(self.excel_file) if file_exists else Workbook()
+            worksheet = workbook.active
+            if not file_exists:
+                worksheet.title = '设备监控数据'
+
+            self._append_rows(worksheet, rows)
+            workbook.save(self.excel_file)
+            workbook.close()
         except Exception as e:
             self._logger.exception("写入Excel文件时出错")
             self._log(f"写入Excel文件时出错: {str(e)}", is_error=True)
@@ -79,28 +95,38 @@ class ExcelExporter:
         self._log(f"监控结果已成功导出到 {excel_path}")
         return self.excel_file
 
-    def _write_frame(self, pd, df) -> None:
-        """写入 DataFrame：已存在文件时追加，并尽量自适应列宽。"""
-        try:
-            import xlsxwriter  # noqa: F401
-            engine = 'xlsxwriter'
-        except ImportError:
-            engine = None
+    @staticmethod
+    def _append_rows(worksheet, rows) -> None:
+        """按表头对齐追加行；出现新列时自动扩列并同步列宽。"""
+        headers = []
+        if worksheet.max_row >= 1:
+            headers = [cell.value for cell in worksheet[1]]
+            while headers and headers[-1] is None:   # 去掉表头尾部的空单元格
+                headers.pop()
 
-        file_exists = os.path.exists(self.excel_file)
-        if file_exists:
-            existing_df = pd.read_excel(self.excel_file)
-            merged_df = pd.concat([existing_df, df])
-        else:
-            merged_df = df
+        if not headers:
+            # 新文件：用首行的键作为表头（保持插入顺序）
+            headers = list(rows[0].keys())
+            for column, name in enumerate(headers, start=1):
+                worksheet.cell(row=1, column=column, value=name)
+                worksheet.column_dimensions[
+                    worksheet.cell(row=1, column=column).column_letter].width = max(
+                        12, min(len(str(name)) + 15, MAX_COLUMN_WIDTH))
 
-        if engine == 'xlsxwriter':
-            with pd.ExcelWriter(self.excel_file, engine=engine) as writer:
-                merged_df.to_excel(writer, index=False, sheet_name='设备监控数据')
-                worksheet = writer.sheets['设备监控数据']
-                for col_num, col_name in enumerate(merged_df.columns):
-                    col_values = merged_df[col_name].dropna().astype(str)
-                    max_length = max([len(str(x)) for x in col_values] + [len(col_name)]) + 15
-                    worksheet.set_column(col_num, col_num, min(max_length, 50))
-        else:
-            merged_df.to_excel(self.excel_file, index=False, sheet_name='设备监控数据')
+        for raw in rows:
+            for name in raw:
+                if name not in headers:
+                    headers.append(name)
+                    column = len(headers)
+                    worksheet.cell(row=1, column=column, value=name)
+            values = [raw.get(name, '') for name in headers]
+            worksheet.append(values)
+
+            # 只更新本轮新增值更长的列（不重算全表，避免大文件反复遍历）
+            for column, value in enumerate(values, start=1):
+                text = '' if value is None else str(value)
+                letter = worksheet.cell(row=1, column=column).column_letter
+                current = worksheet.column_dimensions[letter].width or 0
+                wanted = min(max(len(text) + 4, 12), MAX_COLUMN_WIDTH)
+                if wanted > current:
+                    worksheet.column_dimensions[letter].width = wanted

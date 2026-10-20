@@ -1,7 +1,4 @@
 PyQt5==5.15.9
-pandas==3.0.0
-# pandas 3.0.0 要求 python>=3.11，且要求 numpy>=1.26（py<3.14）或 >=2.3.3（py>=3.14）
-numpy>=1.26
 openpyxl==3.1.2
 paramiko==3.5.1
 # 协议加密通道（Command.exec 的 AES-128-CBC）直接使用；paramiko 亦依赖它

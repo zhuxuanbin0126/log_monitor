@@ -36,6 +36,8 @@ a = Analysis(
     excludes=[
         'tkinter', 'test', 'unittest', 'pywin32_testutil', 'setuptools',
         'pkg_resources',
+        # Excel 导出已改为 openpyxl 直写，pandas/numpy 不再需要（约 40~60MB）
+        'pandas', 'numpy', 'matplotlib', 'scipy', 'IPython', 'jupyter',
         # 未使用的 Qt 组件（PyInstaller 会连带打入大量插件/DLL）
         'PyQt5.QtQml', 'PyQt5.QtQuick', 'PyQt5.QtQuickWidgets',
         'PyQt5.QtWebEngine', 'PyQt5.QtWebEngineWidgets', 'PyQt5.QtWebEngineCore',
@@ -47,6 +49,16 @@ a = Analysis(
     noarchive=False,
     optimize=2,
 )
+
+# 进一步剔除无用体积：Qt 翻译文件、QML 运行时、软件 OpenGL 兜底 DLL
+# （本项目是纯 Widgets 界面，不使用这些资源；它们通常合计 10~20MB）
+_BIN_DROP = ('opengl32sw.dll', 'd3dcompiler_', 'qt5quick', 'qt5qml')
+_DATA_DROP = ('/translations/', '\\translations\\', '/qml/', '\\qml\\')
+a.binaries = [item for item in a.binaries
+              if not any(token in item[0].lower() for token in _BIN_DROP)]
+a.datas = [item for item in a.datas
+           if not any(token in item[0].lower() for token in _DATA_DROP)]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
