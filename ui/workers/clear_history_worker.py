@@ -25,13 +25,25 @@ class ClearHistoryWorker(QThread):
     def __init__(self, plan, parent=None):
         super().__init__(parent)
         self._plan = list(plan)
+        self._should_stop = False
+
+    def stop(self) -> None:
+        """请求中断（协作式：当前条目处理完即退出，已删条目照常回报）。"""
+        self._should_stop = True
+
+    def should_stop(self) -> bool:
+        return self._should_stop
 
     def run(self) -> None:
         try:
-            results = execute_plan(self._plan, on_item=self.item_done.emit)
+            results = execute_plan(self._plan, on_item=self.item_done.emit,
+                                   should_stop=self.should_stop)
             removed = sum(result.removed for result in results)
             failed = sum(1 for result in results if not result.ok)
             summary = summarize_results(results)
+            if len(results) < len(self._plan):
+                summary += (f"，已中断：剩余 {len(self._plan) - len(results)} "
+                            f"个条目未执行")
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("[清理历史] 执行失败")
             removed, failed, summary = 0, len(self._plan), f"清理失败: {exc}"

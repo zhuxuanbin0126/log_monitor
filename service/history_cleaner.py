@@ -290,11 +290,20 @@ def _remove_item(item: CleanItem) -> CleanResult:
 
 
 def execute_plan(plan: Sequence[CleanItem],
-                 on_item: Optional[Callable[[CleanResult], None]] = None
+                 on_item: Optional[Callable[[CleanResult], None]] = None,
+                 should_stop: Optional[Callable[[], bool]] = None
                  ) -> List[CleanResult]:
-    """执行清理规划；每个条目完成后回调 ``on_item``（供 UI 逐项回报）。"""
+    """执行清理规划；每个条目完成后回调 ``on_item``（供 UI 逐项回报）。
+
+    ``should_stop`` 为真时在**条目边界**停止（已删除的条目照常回报，
+    未执行的条目留在规划里，汇总时可据此说明「已中断」）。
+    """
     results: List[CleanResult] = []
     for item in plan:
+        if should_stop is not None and should_stop():
+            logger.info("[清理历史] 已请求中断：剩余 %s 个条目未执行",
+                        len(plan) - len(results))
+            break
         result = _remove_item(item)
         results.append(result)
         if on_item is not None:

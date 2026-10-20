@@ -41,6 +41,11 @@ class EnableAdbWorker(QThread):
         """请求停止（协作式，当前设备处理完即退出）。"""
         self._should_stop = True
 
+    @property
+    def was_stopped(self) -> bool:
+        """是否因「中断任务」提前退出（供 UI 汇总说明，区分于真正的失败）。"""
+        return self._should_stop
+
     def run(self) -> None:
         ok_count = 0
         total = len(self._devices)

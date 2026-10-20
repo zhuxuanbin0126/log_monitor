@@ -53,6 +53,8 @@ DATA_DIR = os.path.join(OUTPUT_DIR, "data")
 SCREENSHOT_DIR = os.path.join(OUTPUT_DIR, "screenshot")
 SWITCH_LOG_DIR = os.path.join(OUTPUT_DIR, "switch_log")
 EXCEL_DIR = os.path.join(OUTPUT_DIR, "excel")
+TASK_CHECKPOINT_FILE = os.path.join(OUTPUT_DIR, "task_checkpoint.json")
+"""未完成任务检查点：任务被中断/程序关闭后，下次启动据此继续未完成的设备"""
 
 # ============================================================
 # 设备类型配置
