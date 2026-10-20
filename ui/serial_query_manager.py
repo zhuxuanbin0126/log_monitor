@@ -225,7 +225,7 @@ class SerialQueryManager(QThread):
         protocol_ready = self._protocol_ready(device_id, ip)
         if protocol_ready:
             logger.info("[串行管理器] %s(%s) 协议可用，跳过 adb/SSH 前置", device_id, ip)
-        else:
+        elif is_android_device(device_id):
             try:
                 # 只断开**本设备**的 adb 连接：并行处理多台设备时，
                 # 全局 `adb disconnect` 会误伤其它正在查询的设备
@@ -233,6 +233,7 @@ class SerialQueryManager(QThread):
             except Exception as e:
                 logger.warning("[串行管理器] 断开设备 %s 的ADB连接时出错: %s", ip, e)
             self.msleep(300)
+        # 非 Android（Linux/SSH）设备无需 adb 断开与等待
 
         adb_just_enabled = False
         try:
@@ -288,7 +289,7 @@ class SerialQueryManager(QThread):
             self.error_signal.emit(device_id, error_msg)
         
         finally:
-            if not protocol_ready:
+            if not protocol_ready and is_android_device(device_id):
                 try:
                     # 同上：并行场景下只断开本设备，避免误伤其它设备
                     ADBService.disconnect_device(ip)

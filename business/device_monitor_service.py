@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import time
 import os
 import threading
+from typing import Dict, Optional, Tuple
 from service.tool_service import ToolService
 from service.data_processing_service import DataProcessingService
 from service.file_service import FileService
@@ -26,6 +27,40 @@ from service.protocol.query_service import (
 )
 
 logger = get_logger(__name__)
+
+TIME_UPTIME_SPLIT = "___LM_TIME_UPTIME_SPLIT___"
+"""SSH/ADB 通道「一次命令同时取回 设备时间 + uptime」的分段标记"""
+
+LEGACY_STATUS_TTL_SECONDS = 5.0
+"""SSH/ADB 通道合并取数的短时缓存（秒）：同一轮询内「设备时间」与「运行时长」复用"""
+
+_LEGACY_STATUS_CACHE: Dict[str, Tuple[float, Tuple[str, str]]] = {}
+_LEGACY_STATUS_LOCK = threading.Lock()
+
+
+def _read_legacy_status(host: str) -> Optional[Tuple[str, str]]:
+    """读缓存；未命中或过期返回 None。"""
+    now = time.monotonic()
+    with _LEGACY_STATUS_LOCK:
+        entry = _LEGACY_STATUS_CACHE.get(host)
+    if entry is not None and entry[0] > now:
+        return entry[1]
+    return None
+
+
+def _write_legacy_status(host: str, value: Tuple[str, str]) -> None:
+    with _LEGACY_STATUS_LOCK:
+        _LEGACY_STATUS_CACHE[host] = (time.monotonic() + LEGACY_STATUS_TTL_SECONDS, value)
+
+
+def clear_legacy_status_cache(host: Optional[str] = None) -> None:
+    """清除合并取数缓存（测试/校时后刷新用）。"""
+    with _LEGACY_STATUS_LOCK:
+        if host is None:
+            _LEGACY_STATUS_CACHE.clear()
+        else:
+            _LEGACY_STATUS_CACHE.pop(host, None)
+
 
 class DeviceMonitorService:
     """设备监控业务服务类，负责设备监控的核心业务逻辑"""
@@ -294,9 +329,37 @@ class DeviceMonitorService:
             logger.debug("协议查询 %s 失败，回落 adb/SSH: %s", ip, exc)
             return None
 
+    def _legacy_status(self, device_id, ip, password):
+        """SSH/ADB 通道**一次命令**取回 ``(epoch 字符串, uptime 文本)``；失败返回 None。
+
+        ``date +%s`` 与 ``uptime`` 合成一条命令下发，替代原先两次 plink 往返
+        （Linux 设备实测每次往返约 2~3s）。结果按设备短时缓存，供同一轮询内的
+        「设备时间」与「运行时长」两次取数复用，等于一次往返取全两项。
+        """
+        cached = _read_legacy_status(ip)
+        if cached is not None:
+            logger.debug("设备 %s 命中合并取数缓存（时间/运行时长）", device_id)
+            return cached
+
+        command = f"date +%s; echo {TIME_UPTIME_SPLIT}; uptime"
+        stdout, stderr, _ = ToolService.execute_command(
+            device_id, ip, password, command, self.base_dir)
+        if not stdout:
+            logger.info("设备 %s 合并取「时间/运行时长」无输出: %s", device_id, stderr)
+            return None
+        parts = stdout.split(TIME_UPTIME_SPLIT)
+        if len(parts) < 2:
+            logger.info("设备 %s 合并命令输出无法分段（前 200 字符）: %r",
+                        device_id, stdout[:200])
+            return None
+        value = (parts[0].strip(), parts[1].strip())
+        _write_legacy_status(ip, value)
+        logger.info("设备 %s 一次往返取回时间/运行时长（epoch=%s）", device_id, value[0])
+        return value
+
     def get_uptime_info(self, ip, password, device_id):
         """
-        获取设备运行时间信息（协议优先，失败回落 adb/SSH）
+        获取设备运行时间信息（协议优先，失败回落 adb/SSH 一次往返）
         """
         status = self._protocol_status(ip)
         if status and status.get("uptime_seconds") is not None:
@@ -305,51 +368,46 @@ class DeviceMonitorService:
                 parse_device_datetime(status.get("date_time")),
             )
 
-        uptime_script = "uptime"
-        
-        stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, uptime_script, self.base_dir)
-        if not stderr:
-            try:
-                # 使用 os 模块相关的 datetime 获取当前时间
-                current_datetime = datetime.now()
-                
-                # 解析 uptime 输出
-                uptime_info = DataProcessingService.parse_uptime(stdout)
-                
-                # 从解析结果中获取运行时间
-                uptime = uptime_info['uptime']
-                # 将字符串形式的 uptime 转换为 timedelta
-                days_part = re.search(r'(\d+) days?', uptime)
-                days = int(days_part.group(1)) if days_part else 0
-                time_part = re.search(r'(\d+):(\d+):(\d+)', uptime)
-                hours = int(time_part.group(1)) if time_part else 0
-                minutes = int(time_part.group(2)) if time_part else 0
-                seconds = int(time_part.group(3)) if time_part else 0
-                uptime_delta = timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
-                
-                # 计算启动时间
-                boot_time = current_datetime - uptime_delta
-                
-                # 补充完整的 uptime 信息
-                uptime_info['boot_time'] = boot_time.isoformat()
-                uptime_info['current_datetime'] = current_datetime.isoformat()
-                uptime_info['uptime_delta'] = str(uptime_delta)
-                
-                return uptime_info
-            except Exception as e:
-                return {
-                    'error': f"计算启动时间失败 - {str(e)}",
-                    'formatted_uptime': "N/A"
-                }
-        else:
+        legacy = self._legacy_status(device_id, ip, password)
+        if legacy is None:
             return {
-                'error': str(stderr),
+                'error': "获取运行时长失败（SSH/ADB 通道无响应）",
+                'formatted_uptime': "N/A",
+            }
+
+        try:
+            current_datetime = datetime.now()
+            uptime_info = DataProcessingService.parse_uptime(legacy[1])
+
+            # 从解析结果中获取运行时间
+            uptime = uptime_info['uptime']
+            # 将字符串形式的 uptime 转换为 timedelta
+            days_part = re.search(r'(\d+) days?', uptime)
+            days = int(days_part.group(1)) if days_part else 0
+            time_part = re.search(r'(\d+):(\d+):(\d+)', uptime)
+            hours = int(time_part.group(1)) if time_part else 0
+            minutes = int(time_part.group(2)) if time_part else 0
+            seconds = int(time_part.group(3)) if time_part else 0
+            uptime_delta = timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
+
+            # 计算启动时间
+            boot_time = current_datetime - uptime_delta
+
+            # 补充完整的 uptime 信息
+            uptime_info['boot_time'] = boot_time.isoformat()
+            uptime_info['current_datetime'] = current_datetime.isoformat()
+            uptime_info['uptime_delta'] = str(uptime_delta)
+
+            return uptime_info
+        except Exception as e:
+            return {
+                'error': f"计算启动时间失败 - {str(e)}",
                 'formatted_uptime': "N/A"
             }
     
     def get_device_time_info(self, ip, password, device_id):
         """
-        获取设备时间信息（协议优先，失败回落 adb/SSH）
+        获取设备时间信息（协议优先，失败回落 adb/SSH 一次往返）
         """
         status = self._protocol_status(ip)
         if status:
@@ -357,20 +415,18 @@ class DeviceMonitorService:
             if device_datetime is not None:
                 return build_device_time_info(device_datetime)
 
-        time_script = "date +%s"
-        
-        stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, time_script, self.base_dir)
-        date_result = stdout.strip() if not stderr else ""
-        
+        legacy = self._legacy_status(device_id, ip, password)
+        date_result = legacy[0] if legacy else ""
+
         remote_time = "N/A"
         time_diff = "N/A"
         formatted_remote_time = "N/A"
-        
+
         if date_result:
             try:
                 # 获取本地电脑当前时间戳（秒）
                 local_time = int(datetime.now().timestamp())
-                
+
                 # 检查远程时间和本地时间是否为合法数字
                 if re.match(r'^[0-9]+$', date_result):
                     remote_time = int(date_result)
@@ -388,8 +444,8 @@ class DeviceMonitorService:
         else:
             # 写入异常到 device_error.txt
             with open('device_error.txt', 'a', encoding='utf-8') as f:
-                f.write(f"{datetime.now()} 设备:{device_id} 获取时间异常: {stderr}\n")
-        
+                f.write(f"{datetime.now()} 设备:{device_id} 获取时间异常: SSH/ADB 通道无响应\n")
+
         return formatted_remote_time, time_diff
     
     def get_start_count(self, ip, password, device_id):
