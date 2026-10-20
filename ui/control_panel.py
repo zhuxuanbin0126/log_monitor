@@ -13,7 +13,8 @@ class ControlPanel(QWidget):
     dev_type_changed = pyqtSignal(str)
     manual_find_clicked = pyqtSignal(str)
     enable_adb_clicked = pyqtSignal()
-    start_monitor_clicked = pyqtSignal(int, bool, bool, bool, bool, str, bool)
+    clear_history_clicked = pyqtSignal()
+    start_monitor_clicked = pyqtSignal(int, bool, bool, bool, bool, str)
     stop_monitor_clicked = pyqtSignal()
     query_selected_clicked = pyqtSignal(str)
     
@@ -107,9 +108,7 @@ class ControlPanel(QWidget):
         self.monitor_start_count_check.setChecked(True)
         self.monitor_screenshot_check = QCheckBox("获取运行画面")
         self.monitor_screenshot_check.setChecked(True)
-        self.clear_history_check = QCheckBox("清除历史数据")
-        self.clear_history_check.setChecked(False)
-        
+
         # 添加截图存储位置自定义按钮
         self.screenshot_path_button = QPushButton("截图存储位置")
         self.screenshot_path_button.clicked.connect(self.on_screenshot_path_clicked)
@@ -125,7 +124,6 @@ class ControlPanel(QWidget):
         monitor_layout.addWidget(self.monitor_boot_check)
         monitor_layout.addWidget(self.monitor_start_count_check)
         monitor_layout.addWidget(self.monitor_screenshot_check)
-        monitor_layout.addWidget(self.clear_history_check)
         monitor_layout.addWidget(self.screenshot_path_button)
         monitor_layout.addStretch()
         
@@ -183,6 +181,10 @@ class ControlPanel(QWidget):
         
         self.query_clean_switch_button = QPushButton("清空开关机次数")
         self.query_clean_switch_button.clicked.connect(lambda: self.query_selected_clicked.emit("clean_switch"))
+
+        # 清理历史数据（控制类操作：选择范围 → 预览 → 后台执行）
+        self.clear_history_button = QPushButton("清理历史数据")
+        self.clear_history_button.clicked.connect(self.clear_history_clicked.emit)
         
         # 协议下发 Set Development 开启 ADB（仅 Android 设备）
         self.enable_adb_button = QPushButton("开启ADB")
@@ -194,6 +196,7 @@ class ControlPanel(QWidget):
         second_row_layout.addWidget(self.query_count_init_button)
         second_row_layout.addWidget(self.query_output_log_button)
         second_row_layout.addWidget(self.query_clean_switch_button)
+        second_row_layout.addWidget(self.clear_history_button)
         second_row_layout.addWidget(self.enable_adb_button)
         second_row_layout.addStretch()
         
@@ -222,11 +225,10 @@ class ControlPanel(QWidget):
         monitor_start_count = self.monitor_start_count_check.isChecked()
         capture_screenshot = self.monitor_screenshot_check.isChecked()
         screenshot_path = self.screenshot_path
-        clear_history = self.clear_history_check.isChecked()
-        
+
         self.start_monitor_clicked.emit(
             delay_time, monitor_time, monitor_boot, monitor_start_count,
-            capture_screenshot, screenshot_path, clear_history
+            capture_screenshot, screenshot_path
         )
         
     def validate_delay_input(self):
@@ -255,7 +257,6 @@ class ControlPanel(QWidget):
         self.monitor_boot_check.setEnabled(not is_monitoring)
         self.monitor_start_count_check.setEnabled(not is_monitoring)
         self.monitor_screenshot_check.setEnabled(not is_monitoring)
-        self.clear_history_check.setEnabled(not is_monitoring)
         self.screenshot_path_button.setEnabled(not is_monitoring)
         
         # 禁用/启用查询/控制区域的所有按钮
@@ -270,6 +271,7 @@ class ControlPanel(QWidget):
         self.query_count_init_button.setEnabled(not is_monitoring)
         self.query_output_log_button.setEnabled(not is_monitoring)
         self.query_clean_switch_button.setEnabled(not is_monitoring)
+        self.clear_history_button.setEnabled(not is_monitoring)
         self.enable_adb_button.setEnabled(not is_monitoring)
         
     def on_screenshot_path_clicked(self):

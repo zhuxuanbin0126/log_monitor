@@ -6,7 +6,6 @@ from PyQt5.QtWidgets import (QApplication, QMessageBox, QDialog, QWidget,
 from datetime import datetime
 import os
 import re
-import shutil
 
 from .base_window import BaseWindow
 from .control_panel import ControlPanel
@@ -20,6 +19,7 @@ from .monitor_thread import MonitorThread
 from .serial_query_manager import SerialQueryManager
 from .workers.adb_enable_worker import EnableAdbWorker
 from .workers.background_discovery_worker import BackgroundDiscovery
+from .workers.clear_history_worker import ClearHistoryWorker
 
 from service.tool_service import ToolService
 from service.file_service import FileService
@@ -28,7 +28,7 @@ from config import (
     get_base_dir, supported_dev_types, tool_path, program_path,
     BACKGROUND_DISCOVERY_ENABLED,
 )
-from .dialogs import CountInitConfirmDialog, UpgradeConfirmDialog
+from .dialogs import ClearHistoryDialog, CountInitConfirmDialog, UpgradeConfirmDialog
 
 logger = get_logger(__name__)
 
@@ -52,6 +52,7 @@ class MainWindow(BaseWindow):
         self.refresh_controller = DeviceRefreshController(self)
         self.enable_adb_worker = None
         self.background_discovery = BackgroundDiscovery(self)
+        self.clear_history_worker = None
         
         # 启动时最大化窗口
         self.showMaximized()
@@ -102,6 +103,7 @@ class MainWindow(BaseWindow):
         self.control_panel.refresh_button.clicked.connect(self.refresh_device_list)
         self.control_panel.manual_find_clicked.connect(self.manual_find_device_list)
         self.control_panel.enable_adb_clicked.connect(self.enable_adb_for_selected)
+        self.control_panel.clear_history_clicked.connect(self.clear_history_data)
         self.control_panel.dev_type_combo.currentTextChanged.connect(self.on_dev_type_changed)
         # 修复：连接到正确的start_monitor_clicked信号，而不是按钮的clicked信号
         self.control_panel.start_monitor_clicked.connect(self.start_monitor)
@@ -340,8 +342,7 @@ class MainWindow(BaseWindow):
         return summary
 
     def start_monitor(self, delay_time, monitor_time, monitor_boot, monitor_start_count,
-                       capture_screenshot=False, screenshot_path="./screenshot",
-                       clear_history=False):
+                       capture_screenshot=False, screenshot_path="./screenshot"):
         """开始监控"""
         if len(self.device_list_view.get_devices()) == 0:
             self.log("请先刷新设备列表")
@@ -355,11 +356,6 @@ class MainWindow(BaseWindow):
         if self.monitor_thread and self.monitor_thread.isRunning():
             self.log("监控已经在运行中")
             return
-
-        if clear_history:
-            self.log("正在清除历史监控数据...")
-            self.clear_history_data()
-            self.excel_exporter.reset()
 
         # 第一次获取设备信息，检测设备在线情况和可执行性
         self.log("开始第一次获取设备信息，检测设备在线情况...")
@@ -806,58 +802,57 @@ class MainWindow(BaseWindow):
         pass
         
     def clear_history_data(self):
-        """清除历史监控数据"""
-        # 定义要清除的文件和文件夹
-        folders_to_clear = [
-            "./output",
-            "./screenshot",
-            "./switch_log",
-            "./monitor_data"
-        ]
-        
-        files_to_clear = [
-            "device_data.json",
-            "device_errors.txt",
-            "device_error.txt"
-        ]
-        
-        # 清除文件夹
-        for folder in folders_to_clear:
-            if os.path.exists(folder):
-                try:
-                    shutil.rmtree(folder)
-                    self.log(f"已清除文件夹: {folder}")
-                except Exception as e:
-                    self.log(f"清除文件夹 {folder} 时出错: {str(e)}")
-        
-        # 清除文件
-        for file in files_to_clear:
-            if os.path.exists(file):
-                try:
-                    os.remove(file)
-                    self.log(f"已清除文件: {file}")
-                except Exception as e:
-                    self.log(f"清除文件 {file} 时出错: {str(e)}")
-        
-        # 清除监控类型对应的日志文件夹
-        from config import supported_dev_types
-        for dev_type in supported_dev_types:
-            if os.path.exists(dev_type):
-                try:
-                    shutil.rmtree(dev_type)
-                    self.log(f"已清除监控类型文件夹: {dev_type}")
-                except Exception as e:
-                    self.log(f"清除监控类型文件夹 {dev_type} 时出错: {str(e)}")
-        
-        # 清除Excel文件
-        for file in os.listdir("."):
-            if file.endswith(".xlsx"):
-                try:
-                    os.remove(file)
-                    self.log(f"已清除Excel文件: {file}")
-                except Exception as e:
-                    self.log(f"清除Excel文件 {file} 时出错: {str(e)}")
-    
+        """清理历史数据（控制类操作）：选范围 → 预览确切路径与文件数 → 后台执行并逐项回报。"""
+        if self.clear_history_worker and self.clear_history_worker.isRunning():
+            self.log("清理历史数据任务正在进行中，请稍候")
+            return
+
+        dialog = ClearHistoryDialog(self.dev_type, parent=self)
+        if dialog.exec_() != QDialog.Accepted:
+            self.log("清理历史数据已取消")
+            return
+
+        plan = dialog.plan()
+        if not plan:
+            self.log("当前选择没有匹配到可清理的历史数据")
+            return
+
+        from service.history_cleaner import plan_summary
+        summary = plan_summary(plan)
+        self.log(f"开始清理历史数据：{summary['items']} 个条目、{summary['files']} 个文件")
+        for item in plan:
+            self.log(f"  待清理: {item.label}（{item.file_count} 个文件）-> {item.path}")
+
+        self.control_panel.clear_history_button.setEnabled(False)
+        self.clear_history_worker = ClearHistoryWorker(plan, self)
+        self.clear_history_worker.item_done.connect(self.on_clear_history_item)
+        self.clear_history_worker.finished_signal.connect(self.on_clear_history_finished)
+        self.clear_history_worker.start()
+
+    def on_clear_history_item(self, result):
+        """单条目清理完成：逐项回报（可审计）。"""
+        scope_text = {"monitor_data": "监控基准数据", "logs": "运行日志",
+                      "screenshot": "截图", "switch_log": "开关机日志",
+                      "excel": "Excel 报表"}.get(result.scope, result.scope)
+        if result.ok:
+            self.log(f"[清理] {scope_text}·{result.label} 已删除 {result.removed} 个文件（{result.path}）")
+        else:
+            self.log(f"[清理] {scope_text}·{result.label} 删除失败（{result.path}）: "
+                     f"{result.error or '部分文件失败'}", is_error=True)
+
+    def on_clear_history_finished(self, removed, failed, summary):
+        """清理结束：汇总 + 恢复按钮 + 重置 Excel 句柄。"""
+        self.log(summary, is_error=failed > 0)
+        self.excel_exporter.reset()
+        # 基准数据可能已被删除 → 重新加载内存中的历史数据
+        try:
+            from service.file_service import FileService
+            if self.monitor_thread and self.monitor_thread.monitor_service:
+                self.monitor_thread.monitor_service.device_data = FileService.load_device_data()
+        except Exception as e:
+            logger.debug("[清理] 重新加载监控数据失败: %s", e)
+        self.control_panel.clear_history_button.setEnabled(True)
+
     def closeEvent(self, event):
         """
         窗口关闭时的处理
@@ -882,6 +877,8 @@ class MainWindow(BaseWindow):
         if self.enable_adb_worker and self.enable_adb_worker.isRunning():
             self.enable_adb_worker.stop()
             self.enable_adb_worker.wait()
+        if self.clear_history_worker and self.clear_history_worker.isRunning():
+            self.clear_history_worker.wait(5000)
         event.accept()
     
     def refresh_device_list(self):
