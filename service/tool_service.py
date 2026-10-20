@@ -73,12 +73,14 @@ class ToolService:
             'ota_version': "N/A",
             'main_version': "N/A",
             'adb_status': "未知",
+            'adb_usb_status': "未知",
         }
 
         # Linux：只取密码，不查这些（Android 专属）信息
         if not ToolService.is_android_device(device_id):
             info['system_type'] = 'Linux'
             info['adb_status'] = '不支持'
+            info['adb_usb_status'] = '不支持'
             return info
 
         # Android：协议优先（一次 Get）
@@ -127,6 +129,8 @@ class ToolService:
             'ota_version': ota_version,
             'main_version': main_version,
             'adb_status': adb_status,
+            # 回落通道只能确认「网络 ADB 是否可用」，有线 ADB 无从判断
+            'adb_usb_status': '未知',
         })
         return info
 

@@ -14,7 +14,7 @@ DeviceInfo  ``deviceName``     设备名称（第 7 列）
 VersionInfo ``app.player``     主版本 / 播放器版本号（第 3 列）
 VersionInfo ``system.buildVersion``  OTA / 固件版本号（第 4 列，缺省回退 ``system.version``）
 NetworkInfo ``interfaces`` 中 ``type == "Ethernet"`` 的 ``mac``  MAC 地址（第 5 列）
-Development ``adbMode`` / ``adbTimer``  ADB 开启情况（第 9 列）
+Development ``adbMode`` / ``adbTimer``  网络 ADB / 有线 ADB 开启情况（第 9/10 列）
 ======  ==================  ==========================================================
 
 ``Development`` 语义（设备侧真值源 ``DevelopmentConfig``，Get 可读·设置参数41）：
@@ -127,17 +127,18 @@ def _adb_timer_value(development: Dict[str, Any]) -> Optional[int]:
 
 
 def parse_development(development: Any) -> Dict[str, Any]:
-    """解析 ``Development``（开发者选项）→ ADB 开启情况。
+    """解析 ``Development``（开发者选项）→ 有线/网络 ADB 的开启情况。
 
     Returns:
-        dict: ``{'adb_status': 状态, 'adb_detail': 细节, 'adb_mode': 原始模式, 'adb_timer': 原始时长}``
+        dict: ``{'adb_status': 网络ADB状态, 'adb_usb_status': 有线ADB状态,
+        'adb_detail': 细节, 'adb_mode': 原始模式, 'adb_timer': 原始时长}``
 
-    ``adb_status`` 取值保持设备列表既有口径（``开启``/``未开启``/``未知``），
-    细节（是否 usb+tcp、是否永久）放在 ``adb_detail``。
+    设备列表把 ADB 拆成两列：``adb_status`` 表示 **网络 ADB**（tcp，即 5555 通道），
+    ``adb_usb_status`` 表示 **有线 ADB**（usb 调试）；两者都取自 ``adbMode``。
     """
     if not isinstance(development, dict) or not development:
-        return {"adb_status": ADB_STATUS_UNKNOWN, "adb_detail": "未读到开发者选项",
-                "adb_mode": "", "adb_timer": None}
+        return {"adb_status": ADB_STATUS_UNKNOWN, "adb_usb_status": ADB_STATUS_UNKNOWN,
+                "adb_detail": "未读到开发者选项", "adb_mode": "", "adb_timer": None}
 
     mode_raw = _text(development.get("adbMode"), default="")
     modes = {part.strip().lower() for part in mode_raw.split(",") if part.strip()}
@@ -147,20 +148,16 @@ def parse_development(development: Any) -> Dict[str, Any]:
         f"adbTimer={timer}" if timer is not None else "adbTimer未知")
     mode_desc = "+".join(sorted(modes)) if modes else "未配置"
 
-    if "tcp" not in modes:
-        # 只开了 usb（或没开）：网络 adb 不可用
-        detail = (f"仅{'+'.join(sorted(modes))}（无网络adb）" if modes
-                  else "未配置adb")
-        return {"adb_status": ADB_STATUS_OFF, "adb_detail": detail,
-                "adb_mode": mode_raw, "adb_timer": timer}
+    net_status = ADB_STATUS_ON if "tcp" in modes else ADB_STATUS_OFF
+    usb_status = ADB_STATUS_ON if "usb" in modes else ADB_STATUS_OFF
 
-    status = ADB_STATUS_ON
-    if "usb" in modes:
-        detail = f"usb+tcp/{timer_desc}"
+    if not modes:
+        detail = "未配置adb"
     else:
-        detail = f"tcp/{timer_desc}"
-    return {"adb_status": status, "adb_detail": detail,
-            "adb_mode": mode_raw, "adb_timer": timer}
+        detail = f"{mode_desc}/{timer_desc}"
+
+    return {"adb_status": net_status, "adb_usb_status": usb_status,
+            "adb_detail": detail, "adb_mode": mode_raw, "adb_timer": timer}
 
 
 def parse_device_info(reply_data: Optional[dict],
@@ -186,6 +183,7 @@ def parse_device_info(reply_data: Optional[dict],
         "ota_version": parse_ota_version(data.get("VersionInfo")),
         "main_version": parse_player_version(data.get("VersionInfo")),
         "adb_status": development["adb_status"],
+        "adb_usb_status": development["adb_usb_status"],
         "adb_detail": development["adb_detail"],
         "adb_mode": development["adb_mode"],
         "adb_timer": development["adb_timer"],

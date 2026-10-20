@@ -115,16 +115,36 @@ class ResultDisplayView(QWidget):
         QMessageBox.information(None, '提示', f'日志导出成功\n导出位置：{path}',QMessageBox.Ok)
         self.log(f"日志导出成功,导出位置：{path}")
 
-    def log(self, message, is_error=False, is_warning=False):
-        """显示日志，支持错误(红色)、警告(黄色)、正常(黑色)"""
-        from PyQt5.QtGui import QColor
+    def log(self, message, is_error=False, is_warning=False, stamp=False):
+        """追加一行日志：错误(红)/警告(橙)/正常(黑)。
+
+        颜色**逐行显式写入**（不复用 ``setTextColor`` 的全局格式状态）：
+        旧写法会受上一行颜色或用户选区影响，导致「上线/下线」这类正常日志
+        偶尔被染成红色。``stamp=True`` 时在行首加系统时间。
+        """
+        from PyQt5.QtGui import QColor, QTextBlockFormat, QTextCharFormat
+        from PyQt5.QtGui import QTextCursor
+
+        text = message
+        if stamp:
+            text = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+
         color = QColor('black')
         if is_error:
-            color = QColor('red')
+            color = QColor('#d32f2f')
         elif is_warning:
-            color = QColor('orange')
-        self.log_text.setTextColor(color)
-        self.log_text.append(message)
+            color = QColor('#e67e22')
+
+        char_format = QTextCharFormat()
+        char_format.setForeground(color)
+
+        cursor = self.log_text.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        if self.log_text.document().characterCount() > 1:   # 已有内容才另起一段
+            cursor.insertBlock(QTextBlockFormat(), char_format)
+        cursor.insertText(text, char_format)
+        self.log_text.setTextCursor(cursor)
+        self.log_text.ensureCursorVisible()
         
     def get_log_text(self):
         """获取日志文本"""

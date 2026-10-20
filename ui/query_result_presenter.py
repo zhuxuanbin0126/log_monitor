@@ -111,8 +111,12 @@ class QueryResultPresenter:
             self._log(f"警告: 播放器启动次数异常，当前值为 {count}", is_warning=True)
 
     def show_summary(self, current_type, total, successful, failed,
-                     not_applicable=None) -> None:
-        """输出查询/操作汇总（「不适用」单独一行，不计入失败）。"""
+                     not_applicable=None, elapsed=None) -> None:
+        """输出查询/操作汇总（「不适用」单独一行，不计入失败）。
+
+        ``elapsed`` 为本次任务耗时（已格式化好的字符串，如 ``11.4s``），
+        传了就追加一行「耗时」，方便核对单次任务执行时长。
+        """
         is_query = self.is_query_operation(current_type)
         op_text = self.query_type_text(current_type)
         success_count = len(successful)
@@ -132,8 +136,11 @@ class QueryResultPresenter:
             self._log(f"  查询失败: {fail_count} 台")
             if failed:
                 self._log(f"  失败设备: {', '.join(failed)}", is_error=True)
+            if elapsed:
+                self._log(f"  本次耗时: {elapsed}")
         else:
-            self._log(f"已完成 {total} 台设备的{op_text}操作")
+            suffix = f"，耗时 {elapsed}" if elapsed else ""
+            self._log(f"已完成 {total} 台设备的{op_text}操作{suffix}")
             if fail_count > 0:
                 self._log(f"  操作失败: {fail_count} 台")
                 self._log(f"  失败设备: {', '.join(failed)}", is_error=True)

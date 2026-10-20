@@ -3,7 +3,6 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QGroupBox, QCheckBox, QMenu, QAction, QHeaderView, QLabel
 )
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QApplication
 import json
 import os
@@ -12,7 +11,7 @@ from service.adb_device_manager import ADBDeviceManager
 
 
 def get_adb_status(device_id):
-    """根据设备 ID 返回 ADB 开启状态：'不支持' / '开启' / '未开启' / '未知'"""
+    """根据设备 ID 返回 **网络 ADB** 状态：'不支持' / '开启' / '未开启' / '未知'"""
     classification = ADBDeviceManager.classify_device(device_id)
     if classification == 'linux':
         return '不支持'
@@ -20,6 +19,16 @@ def get_adb_status(device_id):
         return '未知'
     # Android 设备使用运行时缓存状态
     return ADBDeviceManager.get_cached_status(device_id)
+
+
+def get_adb_usb_status(device_id):
+    """根据设备 ID 返回 **有线 ADB** 状态的默认值。
+
+    有线（usb 调试）状态只能从协议 ``Development.adbMode`` 读到；读不到时统一为
+    「未知」，不臆测为开启/未开启。
+    """
+    classification = ADBDeviceManager.classify_device(device_id)
+    return '不支持' if classification == 'linux' else '未知'
 
 class DeviceListView(QWidget):
     """设备列表视图类，负责设备列表的显示和管理"""
@@ -55,7 +64,8 @@ class DeviceListView(QWidget):
             (6, "设备密码"),
             (7, "设备名称"),
             (8, "系统类型"),
-            (9, "ADB开启情况"),
+            (9, "网络ADB"),
+            (10, "有线ADB"),
         ]
         
         for col_index, col_name in optional_columns:
@@ -84,7 +94,7 @@ class DeviceListView(QWidget):
         
     def create_device_table(self, parent_layout):
         """创建设备表格"""
-        col_list = ["选择", "设备ID", "IP地址", "主版本", "OTA版本", "MAC地址", "设备密码", "设备名称", "系统类型", "ADB开启情况"]
+        col_list = ["选择", "设备ID", "IP地址", "主版本", "OTA版本", "MAC地址", "设备密码", "设备名称", "系统类型", "网络ADB", "有线ADB"]
         self.device_table = QTableWidget()
         self.device_table.setColumnCount(len(col_list))
         self.device_table.setHorizontalHeaderLabels(col_list)
@@ -226,19 +236,22 @@ class DeviceListView(QWidget):
         system_type_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
         self.device_table.setItem(row, 8, system_type_item)
 
-        # ADB开启情况：优先使用 device_info 中的实时状态，回退到缓存
+        # 网络ADB / 有线ADB：优先使用 device_info 中的实时状态，回退到默认口径。
+        # 两列都统一用黑色字体（不再用绿/橙/灰区分状态）
         adb_status = device_info.get('adb_status', get_adb_status(device_id))
         adb_item = QTableWidgetItem(adb_status)
         adb_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-        if adb_status == '不支持':
-            adb_item.setForeground(QColor('#888888'))
-        elif adb_status == '开启':
-            adb_item.setForeground(QColor('#27ae60'))
-        elif adb_status == '未开启':
-            adb_item.setForeground(QColor('#e67e22'))
         self.device_table.setItem(row, 9, adb_item)
+
+        adb_usb_status = (device_info.get('adb_usb_status')
+                          or get_adb_usb_status(device_id))
+        adb_usb_item = QTableWidgetItem(adb_usb_status)
+        adb_usb_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        self.device_table.setItem(row, 10, adb_usb_item)
+
         # 同步回写内存数据
         self.devices[row]['adb_status'] = adb_status
+        self.devices[row]['adb_usb_status'] = adb_usb_status
             
     def on_device_selected(self, row, column):
         """设备被选择时的处理"""
@@ -388,8 +401,8 @@ class DeviceListView(QWidget):
         # 显示列：0(选择), 1(设备ID), 2(IP地址), 3(主版本), 4(OTA版本)
         visible_columns = [0, 1, 2, 3, 4]
         
-        # 隐藏列：5(MAC地址), 6(设备密码), 7(设备名称), 8(系统类型), 9(ADB开启情况)
-        hidden_columns = [5, 6, 7, 8, 9]
+        # 隐藏列：5(MAC地址), 6(设备密码), 7(设备名称), 8(系统类型), 9(网络ADB), 10(有线ADB)
+        hidden_columns = [5, 6, 7, 8, 9, 10]
         
         # 设置列的显示状态
         for col in range(self.device_table.columnCount()):
@@ -410,24 +423,6 @@ class DeviceListView(QWidget):
         else:
             self.device_table.setColumnHidden(column_index, True)
 
-    def update_adb_status(self, device_id, status):
-        """更新设备的 ADB 开启状态"""
-        for row in range(self.device_table.rowCount()):
-            id_item = self.device_table.item(row, 1)
-            if id_item and id_item.text() == device_id:
-                adb_item = QTableWidgetItem(status)
-                adb_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-                if status == '不支持':
-                    adb_item.setForeground(QColor('#888888'))
-                elif status == '开启':
-                    adb_item.setForeground(QColor('#27ae60'))
-                elif status == '未开启':
-                    adb_item.setForeground(QColor('#e67e22'))
-                self.device_table.setItem(row, 9, adb_item)
-                # 同步更新内存中的设备信息，避免后续查询/操作仍使用旧状态
-                self.devices[row]['adb_status'] = status
-                break
-
     def update_device_info_field(self, device_id, field, value):
         """更新指定设备的某个字段，并刷新对应单元格"""
         for row, device_info in enumerate(self.devices):
@@ -441,6 +436,7 @@ class DeviceListView(QWidget):
                     'device_name': 7,
                     'system_type': 8,
                     'adb_status': 9,
+                    'adb_usb_status': 10,
                 }
                 if field in col_map:
                     item = QTableWidgetItem(str(value) if value is not None else 'N/A')

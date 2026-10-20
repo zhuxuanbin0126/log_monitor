@@ -63,8 +63,9 @@ def test_parse_player_and_ota_version():
 
 def test_parse_development_full_combination():
     result = parse_development({"adbMode": "usb,tcp", "adbTimer": 0})
-    assert result["adb_status"] == ADB_STATUS_ON
-    assert result["adb_detail"] == "usb+tcp/永久"
+    assert result["adb_status"] == ADB_STATUS_ON        # 网络 ADB（tcp）
+    assert result["adb_usb_status"] == ADB_STATUS_ON    # 有线 ADB（usb）
+    assert result["adb_detail"] == "tcp+usb/永久"
     assert result["adb_mode"] == "usb,tcp"
     assert result["adb_timer"] == 0
 
@@ -72,6 +73,7 @@ def test_parse_development_full_combination():
 def test_parse_development_tcp_only_and_timed():
     only_tcp = parse_development({"adbMode": "tcp", "adbTimer": 0})
     assert only_tcp["adb_status"] == ADB_STATUS_ON
+    assert only_tcp["adb_usb_status"] == ADB_STATUS_OFF
     assert only_tcp["adb_detail"] == "tcp/永久"
 
     timed = parse_development({"adbMode": "tcp", "adbTimer": 120000})
@@ -82,16 +84,19 @@ def test_parse_development_tcp_only_and_timed():
 
 def test_parse_development_usb_only_means_no_network_adb():
     result = parse_development({"adbMode": "usb", "adbTimer": 0})
-    assert result["adb_status"] == ADB_STATUS_OFF
-    assert "无网络adb" in result["adb_detail"]
+    assert result["adb_status"] == ADB_STATUS_OFF          # 网络 ADB 未开启
+    assert result["adb_usb_status"] == ADB_STATUS_ON       # 有线 ADB 开启
+    assert result["adb_detail"] == "usb/永久"
 
 
 def test_parse_development_missing_or_odd_input():
     assert parse_development(None)["adb_status"] == ADB_STATUS_UNKNOWN
+    assert parse_development(None)["adb_usb_status"] == ADB_STATUS_UNKNOWN
     assert parse_development({})["adb_status"] == ADB_STATUS_UNKNOWN
 
     no_mode = parse_development({"adbTimer": 0})
     assert no_mode["adb_status"] == ADB_STATUS_OFF
+    assert no_mode["adb_usb_status"] == ADB_STATUS_OFF
     assert no_mode["adb_detail"] == "未配置adb"
 
     # timer 为非法字符串时不崩，按「未知」展示
@@ -116,7 +121,8 @@ def test_parse_device_info_maps_all_columns():
     assert info["ota_version"] == "V1.2.23.0"
     assert info["system_type"] == "Android"
     assert info["adb_status"] == ADB_STATUS_ON
-    assert info["adb_detail"] == "usb+tcp/永久"
+    assert info["adb_usb_status"] == ADB_STATUS_ON
+    assert info["adb_detail"] == "tcp+usb/永久"
 
 
 # ---------------------------------------------------------------- 回环假设备
@@ -266,6 +272,7 @@ def test_build_device_info_linux_only_password():
     info = ts.ToolService._build_device_info('D16-00-0001', '192.168.1.9', 'pwd')
     assert info['system_type'] == 'Linux'
     assert info['adb_status'] == '不支持'
+    assert info['adb_usb_status'] == '不支持'
     assert info['mac_address'] == NA
     assert info['device_name'] == NA
     assert info['ota_version'] == NA
@@ -324,3 +331,4 @@ def test_build_device_info_list_path_does_not_force_adb(monkeypatch):
     info = ts.ToolService._build_device_info('H16-00-0001', '192.168.1.8', 'pwd',
                                              enable_adb_fallback=False)
     assert info['adb_status'] == '未开启'
+    assert info['adb_usb_status'] == '未知'      # 回落通道判断不了有线 ADB

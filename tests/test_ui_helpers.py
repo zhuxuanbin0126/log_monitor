@@ -60,6 +60,26 @@ def test_summary_output():
     assert '失败设备: C' in joined
 
 
+def test_summary_reports_elapsed():
+    """汇总里带「本次耗时」，便于核对单次任务执行时长。"""
+    logs = []
+    presenter = QueryResultPresenter(lambda msg, **kw: logs.append(msg))
+    presenter.show_summary('all', 2, ['A', 'B'], [], elapsed='12.3s')
+    assert '本次耗时: 12.3s' in "\n".join(logs)
+
+    op_logs = []
+    op_presenter = QueryResultPresenter(lambda msg, **kw: op_logs.append(msg))
+    op_presenter.show_summary('screenshot', 2, ['A'], [], elapsed='5.0s')
+    assert '耗时 5.0s' in "\n".join(op_logs)
+
+
+def test_format_duration_readable():
+    from ui.main_window import MainWindow
+    assert MainWindow._format_duration(12.34) == '12.3s'
+    assert MainWindow._format_duration(75) == '1分15秒'
+    assert MainWindow._format_duration(3723) == '1时02分03秒'
+
+
 def test_excel_exporter_writes_file(monkeypatch, tmp_path):
     import ui.excel_exporter as excel_module
 
