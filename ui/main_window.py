@@ -1016,27 +1016,38 @@ class MainWindow(BaseWindow):
         """按「监控是否运行」决定后台心跳的启停（监控运行时不跑）。"""
         monitoring = bool(self.monitor_thread and self.monitor_thread.isRunning())
         if BACKGROUND_DISCOVERY_ENABLED and not monitoring and self.devices:
+            self.background_discovery.set_filter(self._is_supported_device)
             self.background_discovery.start()
         else:
             self.background_discovery.stop()
 
     def on_background_devices_changed(self, added, removed):
-        """后台心跳发现设备上线/下线：**仅在有变化时**刷新一次表格。
+        """后台心跳发现设备上线/下线：**只做增量变更**，不做整表刷新。
 
-        无变化时后台心跳不会发信号，因此不会产生多余的表格刷新与卡顿。
+        - 新增：逐台后台补全信息，到位后**插入一行**（不重扫、不重建整表）；
+        - 下线：**只移除该行**；
+        - 无变化时心跳根本不发信号，因此不会有任何多余的表格刷新。
+
+        （旧实现是触发 `refresh_device_list()` 全量重扫 → 11 台重新取一遍，约 8s。）
         """
         parts = []
         if added:
             parts.append("上线 " + ", ".join(f"{dev}({ip})" for dev, ip in added))
         if removed:
             parts.append("下线 " + ", ".join(f"{dev}({ip})" for dev, ip in removed))
-        self.log("后台心跳检测到设备变化 - " + "；".join(parts))
-        self.control_panel.update_refresh_status(
-            f"设备变化（+{len(added)}/-{len(removed)}），正在刷新...")
+        self.log("后台心跳检测到设备变化（增量更新）- " + "；".join(parts))
 
-        # 已在刷新中则跳过，避免重复的扫描与表格重建
-        if not self.refresh_controller.is_busy():
-            self.refresh_device_list()
+        for device_id, _ip in removed:
+            if self.device_list_view.remove_device(device_id):
+                self.devices = [d for d in (self.devices or []) if d.get('id') != device_id]
+                logger.info("[后台心跳] 已移除下线设备行: %s", device_id)
+
+        if added:
+            # 仅对新增设备补全信息（并行、逐台回报 → 插入/更新该行）
+            self.refresh_controller.fetch_device_info(added)
+
+        count = len(self.devices or [])
+        self.control_panel.update_refresh_status(f"当前设备数: {count}")
 
     def on_refresh_failed(self, error_msg):
         """设备查找失败回调。"""

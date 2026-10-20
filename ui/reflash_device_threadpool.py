@@ -68,16 +68,19 @@ class QRunnableWrapper(QRunnable):
     def run(self):
         devices = None
         try:
-            """增加重试机制"""
+            """增加重试机制：仅在**取数失败**（返回空）时重试。
+
+            旧逻辑在 mac 为空（Linux 设备本就无 MAC；旧固件也确实取不到）时也重试 3 次，
+            每台白等 0.2s 且毫无收益 —— 现只在真失败时重试。
+            """
             for i in range(3):
                 try:
                     devices = ToolService.get_device_info(self.devices_info, self.pattern)
-                    # print(f"查询设备 {self.devices_info} 第 {i+1} 次结果: {devices}")
-                    if devices and devices.get("mac_address") and devices["mac_address"] != "未知":
+                    if devices:
                         break
                 except Exception as inner_e:
                     logger.warning("查询设备 %s 第 %s 次尝试失败: %s", self.devices_info, i + 1, inner_e)
-                
+
                 if i < 2:
                     time.sleep(0.1)
 

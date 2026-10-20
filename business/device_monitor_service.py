@@ -319,9 +319,15 @@ class DeviceMonitorService:
         except Exception as e:
             return OperationResult(False, error=f"{device_id} 更新节目失败 - {str(e)}")
 
-    def _protocol_status(self, ip):
-        """取协议通道状态；未启用或不支持时返回 None（不影响 adb/SSH 回落）。"""
+    def _protocol_status(self, ip, device_id=None):
+        """取协议通道状态；未启用/非 Android/不支持时返回 None（走 adb/SSH）。
+
+        Linux 设备（C08L/C16L/D16/D36）**不支持 MagicPlayer 协议**，直接跳过探测，
+        省掉每次取数的建连尝试。
+        """
         if not USE_PROTOCOL_QUERY:
+            return None
+        if device_id is not None and not ToolService.is_android_device(device_id):
             return None
         try:
             return get_device_status(ip)
@@ -361,7 +367,7 @@ class DeviceMonitorService:
         """
         获取设备运行时间信息（协议优先，失败回落 adb/SSH 一次往返）
         """
-        status = self._protocol_status(ip)
+        status = self._protocol_status(ip, device_id)
         if status and status.get("uptime_seconds") is not None:
             return build_uptime_info(
                 status["uptime_seconds"],
@@ -409,7 +415,7 @@ class DeviceMonitorService:
         """
         获取设备时间信息（协议优先，失败回落 adb/SSH 一次往返）
         """
-        status = self._protocol_status(ip)
+        status = self._protocol_status(ip, device_id)
         if status:
             device_datetime = parse_device_datetime(status.get("date_time"))
             if device_datetime is not None:
@@ -450,12 +456,12 @@ class DeviceMonitorService:
     
     def get_start_count(self, ip, password, device_id):
         """
-        获取安卓系列播放器启动次数（协议优先，失败回落 adb/SSH）
+        获取播放器启动次数（Android 走协议 exec 优先、adb/SSH 兜底）。
+
+        **Linux 设备（C08L/C16L/D16/D36）本身没有 MagicPlayer 播放器概念**，
+        因此恒为「无法获取」，也不再尝试任何协议/取数命令。
         """
-        # 检查设备ID前缀是否为C08L、C16L或D16
-        dev_type_prefix = device_id.split('-')[0]
-        if dev_type_prefix in ["C08L", "C16L", "D16"]:
-            # 这三种设备类型不支持获取播放器启动次数
+        if not ToolService.is_android_device(device_id):
             return "无法获取"
 
         start_count_script = "getprop huidu.player.start_count"
@@ -654,14 +660,14 @@ class DeviceMonitorService:
                 'difference': '获取设备时间信息失败',
             })
         if monitor_start_count:
-            dev_type_prefix = device_id.split('-')[0]
-            if dev_type_prefix not in ["C08L", "C16L", "D16"]:
-                if not start_count or "Error" in str(start_count):
-                    errors.append({
-                        'type': '启动次数获取失败',
-                        'process': f'设备ID: {device_id}, IP: {ip}',
-                        'difference': '获取启动次数信息失败',
-                    })
+            if not ToolService.is_android_device(device_id):
+                return          # Linux 无播放器概念，无「启动次数获取失败」之说
+            if not start_count or "Error" in str(start_count):
+                errors.append({
+                    'type': '启动次数获取失败',
+                    'process': f'设备ID: {device_id}, IP: {ip}',
+                    'difference': '获取启动次数信息失败',
+                })
 
     def _update_device_data(self, device_id, formatted_uptime):
         """更新设备数据最后采样值（锁内，避免并行监控互相覆盖）"""
@@ -669,8 +675,8 @@ class DeviceMonitorService:
             if device_id not in self.device_data:
                 self.device_data[device_id] = {}
             self.device_data[device_id]['last_uptime'] = formatted_uptime
-            dev_type_prefix = device_id.split('-')[0]
-            if dev_type_prefix in ["C08L", "C16L", "D16"]:
+            if not ToolService.is_android_device(device_id):
+                # Linux 无播放器概念 → 启动次数恒为「无法获取」
                 self.device_data[device_id]['last_start_count'] = '无法获取'
     
     def capture_screenshot(self, device_id, ip, password, system_type, screenshot_path="./screenshot"):

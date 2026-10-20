@@ -160,6 +160,20 @@ class DeviceListView(QWidget):
         self._write_row(len(self.devices) - 1, self.devices[-1])
         return True
 
+    def remove_device(self, device_id):
+        """**增量**按设备ID移除一行（设备下线时用），返回是否移除成功。"""
+        for row, existing in enumerate(self.devices):
+            if existing.get('id') == device_id:
+                self.devices.pop(row)
+                self.device_table.removeRow(row)
+                self.selected_devices.discard(device_id)
+                self.selected_devices_info = [
+                    info for info in self.selected_devices_info
+                    if info.get('id') != device_id]
+                self.device_table.viewport().update()
+                return True
+        return False
+
     def _write_row(self, row, device_info):
         """把一台设备的信息写入指定行（整表重建与增量更新共用）。"""
         device_id = device_info['id']

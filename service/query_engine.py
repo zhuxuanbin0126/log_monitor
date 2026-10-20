@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from config import get_device_remote_path
+from service.device_utils import is_android_device
 from service.logging_service import get_logger
 from service.protocol.command_query import exec_if_supported, is_protocol_supported
 
@@ -45,9 +46,6 @@ COUNT_SPLIT_MARKER = "___LM_COUNT_SPLIT___"
 
 START_COUNT_CMD = "getprop huidu.player.start_count"
 """播放器启动次数的取数命令（与旧 adb/SSH 通道一致）"""
-
-NO_START_COUNT_TYPES = frozenset({"C08L", "C16L", "D16"})
-"""不支持取播放器启动次数的型号（与 ``DeviceMonitorService`` 口径一致）"""
 
 _INT_RE = re.compile(r"\d+")
 
@@ -207,25 +205,32 @@ def query_all(monitor_service, device_id: str, ip: str, password: str,
     switch_path = f"{path}/swich_counter.csv"
     network_path = f"{path}/network_counter.csv"
 
-    dev_type_prefix = device_id.split("-")[0] if "-" in device_id else device_id
-    want_start_count = dev_type_prefix not in NO_START_COUNT_TYPES
+    # Linux 设备（C08L/C16L/D16/D36）**不支持 MagicPlayer 协议**、也无播放器概念：
+    # 因此不走任何协议 exec（含批量/逐项），启动次数恒为「无法获取」，计数走 SSH。
+    is_android = is_android_device(device_id)
+    want_start_count = is_android
     start_cmd = START_COUNT_CMD if want_start_count else ""
-
-    logger.info("[查询全部] %s 阶段二：批量取 启动次数/开关机次数/网络开关机次数", device_id)
+    logger.info("[查询全部] %s 阶段二：批量取 启动次数/开关机次数/网络开关机次数"
+                "（系统=%s）", device_id, "Android" if is_android else "Linux")
     phase2 = time.monotonic()
-    counts = query_counts_batched(
-        ip, switch_path, network_path, start_count_cmd=start_cmd)
-    if counts is not None:
-        outcome.protocol_used = True
-    else:
-        # 批量串命令在部分固件上不可用 → **仍在协议内**逐项 exec，
-        # 避免动辄降级到 adb（实测单台 15~20s）
-        individual = query_counts_individually(
+    counts = None
+    if is_android:
+        counts = query_counts_batched(
             ip, switch_path, network_path, start_count_cmd=start_cmd)
-        if any(value is not None for value in individual.values()):
-            counts = individual
+        if counts is not None:
             outcome.protocol_used = True
+        else:
+            # 批量串命令在部分固件上不可用 → **仍在协议内**逐项 exec，
+            # 避免动辄降级到 adb（实测单台 15~20s）
+            individual = query_counts_individually(
+                ip, switch_path, network_path, start_count_cmd=start_cmd)
+            if any(value is not None for value in individual.values()):
+                counts = individual
+                outcome.protocol_used = True
     counts = counts or {}
+    logger.info("[查询全部] %s 阶段二取数（%.2fs，通道=%s）：%s",
+                device_id, time.monotonic() - phase2,
+                "协议" if outcome.protocol_used else "adb/SSH", counts)
 
     # 播放器启动次数
     if want_start_count:

@@ -85,6 +85,15 @@ class BackgroundDiscovery(QObject):
         self._tracker = PresenceTracker(offline_grace=offline_grace)
         self._worker = _ProbeWorker(probe_seconds, interval_ms / 1000.0, self)
         self._worker.probed.connect(self._on_probed)
+        self._accept = None
+
+    def set_filter(self, accept) -> None:
+        """设置设备过滤谓词 ``accept(device_id) -> bool``（与找卡/表格同口径）。
+
+        必须过滤：UDP 探测会应答**所有**MagicPlayer 设备（含 Q910 等不在支持型号内的），
+        若不过滤，这些设备会被当成「新上线」反复触发刷新。
+        """
+        self._accept = accept
 
     def seed(self, pairs) -> None:
         """以当前已知设备集合初始化基线（避免首轮把所有设备误报为「上线」）。"""
@@ -111,7 +120,9 @@ class BackgroundDiscovery(QObject):
             logger.info("后台心跳找卡已停止")
 
     def _on_probed(self, found) -> None:
-        """主线程侧：记录一轮结果并仅在变化时上报。"""
+        """主线程侧：按同口径过滤 → 记录一轮结果 → 仅在变化时上报。"""
+        if self._accept is not None:
+            found = [pair for pair in found if self._accept(pair[0])]
         diff = self._tracker.observe([tuple(pair) for pair in found])
         if diff.changed:
             logger.info("后台心跳：上线 %s 台，下线 %s 台",
