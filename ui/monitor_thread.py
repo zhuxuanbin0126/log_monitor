@@ -1,9 +1,9 @@
 from PyQt5.QtCore import QThread, pyqtSignal
 from business.device_monitor_service import DeviceMonitorService
-from service.batch_dispatch import run_grouped
+from service.batch_dispatch import run_windowed
 from service.tool_service import ToolService
 from service.device_utils import is_android_device
-from config import QUERY_GROUP_SIZE, QUERY_MAX_WORKERS
+from config import QUERY_MAX_WORKERS
 from service.logging_service import get_logger
 from data_models import MonitorConfig
 import copy
@@ -85,11 +85,11 @@ class MonitorThread(QThread):
                 self._process_one_device(device_info)
             return
 
-        logger.info("[监控] 本轮分组限流处理 %s 台设备（每组 %s、组内并发 %s）",
-                    len(devices), QUERY_GROUP_SIZE, workers)
-        run_grouped(devices, self._process_one_device,
-                    group_size=QUERY_GROUP_SIZE, max_workers=workers,
-                    should_stop=lambda: not self.running)
+        logger.info("[监控] 本轮滑动窗口处理 %s 台设备（并发上限 %s）",
+                    len(devices), workers)
+        run_windowed(devices, self._process_one_device,
+                     max_workers=workers,
+                     should_stop=lambda: not self.running)
 
     def _process_one_device(self, device_info):
         """处理单个设备的监控检查"""

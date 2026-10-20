@@ -24,6 +24,7 @@ from .workers.clear_history_worker import ClearHistoryWorker
 from service.tool_service import ToolService
 from service.file_service import FileService
 from service.logging_service import get_logger
+from service.task_control import GLOBAL_TASK
 from config import (
     get_base_dir, supported_dev_types, tool_path, program_path,
     BACKGROUND_DISCOVERY_ENABLED,
@@ -64,6 +65,8 @@ class MainWindow(BaseWindow):
         self.current_query_type = None
         self.getdevice_num = 0
         self._discovered_count = 0
+        self._task_started_at = None
+        self._monitor_started_at = None
         
         # 初始化日志文件
         base_dir = get_base_dir(self.dev_type)
@@ -105,6 +108,8 @@ class MainWindow(BaseWindow):
         self.control_panel.manual_find_clicked.connect(self.manual_find_device_list)
         self.control_panel.enable_adb_clicked.connect(self.enable_adb_for_selected)
         self.control_panel.clear_history_clicked.connect(self.clear_history_data)
+        self.control_panel.stop_task_clicked.connect(self.interrupt_tasks)
+        self.control_panel.resume_task_clicked.connect(self.resume_last_task)
         self.control_panel.dev_type_combo.currentTextChanged.connect(self.on_dev_type_changed)
         # 修复：连接到正确的start_monitor_clicked信号，而不是按钮的clicked信号
         self.control_panel.start_monitor_clicked.connect(self.start_monitor)
@@ -442,7 +447,8 @@ class MainWindow(BaseWindow):
 
         suffix = "，同时获取运行画面" if capture_screenshot else ""
         type_name = "所有类型的设备" if self.dev_type == 'A-B-C-D-H' else f"{self.dev_type} 类型设备"
-        self.log(f"开始监控{type_name}，查询间隔为 {delay_time} 秒{suffix}")
+        self._monitor_started_at = time.monotonic()
+        self.log(f"开始监控{type_name}，查询间隔为 {delay_time} 秒{suffix}", stamp=True)
     
     def stop_monitor(self):
         """停止监控"""
@@ -476,7 +482,10 @@ class MainWindow(BaseWindow):
                 # 更新控制面板状态
                 self.control_panel.set_monitor_status(False)
                 
-                self.log("监控已停止")
+                elapsed = (self._format_duration(time.monotonic() - self._monitor_started_at)
+                           if self._monitor_started_at else "未知")
+                self._monitor_started_at = None
+                self.log(f"监控已停止（本次已运行 {elapsed}）", stamp=True)
         except Exception as e:
             self.log(f"停止监控时出错: {str(e)}", is_error=True)
             # 无论如何都要确保按钮状态正确
@@ -601,17 +610,36 @@ class MainWindow(BaseWindow):
                     new_selected.add(device_id)
             self.device_list_view.set_selected_devices(new_selected)
     
-    def query_selected(self, query_type):
-        """查询选中的设备"""
-        selected_devices = self.device_list_view.get_selected_devices()
-        if not selected_devices:
-            self.log("请先选择要查询的设备")
-            return
+    def query_selected(self, query_type, devices_override=None):
+        """查询选中的设备。
+
+        Args:
+            devices_override: 指定设备清单（``[(id, ip, password, system_type), ...]``）。
+                仅用于「继续未完成」续跑，此时忽略界面勾选。
+        """
+        if devices_override:
+            devices_to_process = list(devices_override)
+        else:
+            selected_devices = self.device_list_view.get_selected_devices()
+            if not selected_devices:
+                self.log("请先选择要查询的设备")
+                return
+            devices_to_process = []
+            for device_info in self.device_list_view.get_devices():
+                device_id = device_info['id']
+                if device_id in selected_devices:
+                    devices_to_process.append((
+                        device_id, device_info['ip'],
+                        device_info.get('password', ''),
+                        device_info.get('system_type', '')))
         
         # 如果存在串行管理器，停止它
         if self.serial_manager and self.serial_manager.isRunning():
             self.serial_manager.stop()
             self.serial_manager.wait()
+
+        # 新一轮任务：清掉上一次的中断标志与剩余清单
+        GLOBAL_TASK.reset()
         
         # 初始化成功和失败设备列表
         self.successful_devices = []
@@ -631,17 +659,7 @@ class MainWindow(BaseWindow):
         
         # 保存查询类型用于汇总
         self.current_query_type = query_type
-        
-        # 收集要处理的设备信息
-        devices_to_process = []
-        for device_info in self.device_list_view.get_devices():
-            device_id = device_info['id']
-            if device_id in selected_devices:
-                ip = device_info['ip']
-                password = device_info.get('password', '')
-                system_type = device_info.get('system_type', '')
-                devices_to_process.append((device_id, ip, password, system_type))
-        
+
         self.getdevice_num = len(devices_to_process)
         
         # 开关机初始化操作前，弹出确认对话框，让用户确认设备分组和文件路径
@@ -681,14 +699,21 @@ class MainWindow(BaseWindow):
         self.serial_manager.error_signal.connect(self.on_query_error)
         self.serial_manager.finished_signal.connect(self.close_csv_file)
         self.serial_manager.state_signal.connect(self.on_query_state)
+        self.serial_manager.progress_signal.connect(self.on_task_progress)
+        self.control_panel.set_task_running(True)
+        self.control_panel.set_resume_available(False)
+        self.control_panel.update_task_status(
+            f"任务：{self.query_presenter.query_type_text(query_type)} 0/{self.getdevice_num}")
+        self._task_started_at = time.monotonic()
         self.serial_manager.start()
         
         # 判断是查询还是操作
         op_text = self.query_presenter.query_type_text(query_type)
+        self.log("\n" + "-" * 71)
         if QueryResultPresenter.is_query_operation(query_type):
-            self.log(f"\n-----------------------------------------------------------------------\n开始查询 {self.getdevice_num} 台设备的{op_text}信息")
+            self.log(f"开始查询 {self.getdevice_num} 台设备的{op_text}信息", stamp=True)
         else:
-            self.log(f"\n-----------------------------------------------------------------------\n开始执行 {self.getdevice_num} 台设备的{op_text}操作")
+            self.log(f"开始执行 {self.getdevice_num} 台设备的{op_text}操作", stamp=True)
     
     def on_query_state(self, device_id, state):
         """接收 SerialQueryManager 的状态信号，更新 ADB 列或刷新设备信息"""
@@ -721,6 +746,16 @@ class MainWindow(BaseWindow):
         if query_count == self.getdevice_num:
             if self.switch_log_file:
                 self.switch_log_file.close()
+            snapshot = GLOBAL_TASK.snapshot()
+            remaining = snapshot.get('remaining') or []
+            elapsed = self._task_elapsed()
+            if remaining:
+                # 被中断：明确告知完成了多少、还剩多少、怎么续跑
+                self.log(
+                    f"任务已中断：完成 {snapshot['done']}/{snapshot['total']} 台，"
+                    f"剩余 {len(remaining)} 台未执行，耗时 {elapsed} "
+                    f"—— 可点击「继续未完成」从断点继续",
+                    is_warning=True, stamp=True)
             # 显示汇总信息（监控任务的查询和截图不显示汇总）
             if not (self.monitor_thread and self.monitor_thread.isRunning()):
                 self.query_presenter.show_summary(
@@ -729,10 +764,93 @@ class MainWindow(BaseWindow):
                     self.successful_devices,
                     self.failed_devices,
                     self.not_applicable_devices,
+                    elapsed=elapsed,
                 )
             # 更新状态栏提示
             op_text = self.query_presenter.query_type_text(self.current_query_type)
-            self.update_status_bar(f"已完成 {self.getdevice_num} 台设备 {op_text}")
+            self.update_status_bar(
+                f"已完成 {self.getdevice_num} 台设备 {op_text}（耗时 {elapsed}）")
+            self.control_panel.set_task_running(False)
+            self.control_panel.set_resume_available(bool(remaining), len(remaining))
+            self.control_panel.update_task_status(
+                f"任务：已中断（{snapshot['done']}/{snapshot['total']}，"
+                f"剩余 {len(remaining)} 台）" if remaining
+                else f"任务：已完成（{snapshot['total']} 台，耗时 {elapsed}）",
+                is_warning=bool(remaining),
+            )
+            self._task_started_at = None
+
+    def _task_elapsed(self):
+        """当前任务已耗时；没记录开始时间时返回「未知」。"""
+        if self._task_started_at is None:
+            return "未知"
+        return self._format_duration(time.monotonic() - self._task_started_at)
+
+    @staticmethod
+    def _format_duration(seconds):
+        """秒数 → 人类可读耗时：``12.3s`` / ``3分05秒`` / ``1时02分03秒``。"""
+        if seconds is None:
+            return "未知"
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        total = int(round(seconds))
+        hours, remainder = divmod(total, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours:
+            return f"{hours}时{minutes:02d}分{secs:02d}秒"
+        return f"{minutes}分{secs:02d}秒"
+
+    # ---------------------------------------------------------------- 任务中断 / 续跑
+
+    def on_task_progress(self, done, total):
+        """串行管理器每完成一台就回报：刷新「正在执行 x/y」提示。"""
+        snapshot = GLOBAL_TASK.snapshot()
+        op_text = self.query_presenter.query_type_text(
+            snapshot.get('label') or self.current_query_type or '')
+        current = snapshot.get('current') or ''
+        suffix = f"（当前：{current}）" if current else ""
+        if snapshot.get('stopped'):
+            self.control_panel.update_task_status(
+                f"任务：{op_text} 正在中断… 已完成 {done}/{total}{suffix}", is_warning=True)
+        else:
+            self.control_panel.update_task_status(
+                f"任务：{op_text} 已完成 {done}/{total}{suffix}")
+
+    def interrupt_tasks(self):
+        """中断当前任务：停止派发新设备，已在执行的当台正常收尾。"""
+        if not GLOBAL_TASK.is_active:
+            self.log("当前没有正在执行的任务")
+            return
+        GLOBAL_TASK.stop()
+        self.log("已请求中断：不再派发新设备，正在执行的当台会正常收尾（不强制杀线程）",
+                 is_warning=True, stamp=True)
+        snapshot = GLOBAL_TASK.snapshot()
+        self.control_panel.update_task_status(
+            f"任务：{self.query_presenter.query_type_text(snapshot.get('label') or '')}"
+            f" 正在中断… 已完成 {snapshot['done']}/{snapshot['total']}", is_warning=True)
+
+    def resume_last_task(self):
+        """从断点继续上次被中断的任务（只跑未完成的设备）。"""
+        if GLOBAL_TASK.is_active or (self.serial_manager and self.serial_manager.isRunning()):
+            self.log("已有任务在执行，请先等待或中断后再续跑")
+            return
+        snapshot = GLOBAL_TASK.snapshot()
+        remaining = snapshot.get('remaining') or []
+        query_type = snapshot.get('label')
+        if not remaining:
+            self.log("没有可继续的未完成任务")
+            self.control_panel.set_resume_available(False)
+            return
+        if query_type in ('count_init', 'upgrade_program'):
+            self.log("该任务带有自定义文件路径，暂不支持断点续跑，请重新发起", is_warning=True)
+            return
+        self.log(f"继续未完成任务：{self.query_presenter.query_type_text(query_type)}，"
+                 f"剩余 {len(remaining)} 台", stamp=True)
+        devices = [tuple(item) for item in remaining if isinstance(item, (list, tuple))]
+        if not devices:
+            self.log("未完成清单格式异常，请重新发起任务", is_error=True)
+            return
+        self.query_selected(query_type, devices_override=devices)
 
     def on_query_result(self, device_id, results):
         """处理查询结果"""
@@ -770,9 +888,12 @@ class MainWindow(BaseWindow):
         except Exception as e:
             self.log(f"自动导出Excel失败: {str(e)}", is_error=True)
 
-    def log(self, message, is_error=False, is_warning=False):
-        """记录日志，支持错误(红色)、警告(黄色)和正常(黑色)消息"""
-        self.result_display_view.log(message, is_error, is_warning)
+    def log(self, message, is_error=False, is_warning=False, stamp=False):
+        """记录日志，支持错误(红色)、警告(橙色)和正常(黑色)消息。
+
+        ``stamp=True`` 时行首带系统时间（用于设备上下线、任务开始/结束等关键节点）。
+        """
+        self.result_display_view.log(message, is_error, is_warning, stamp)
         
     def format_time_to_minute(self, time_str):
         """将时间字符串格式化为精确到分钟"""
@@ -1008,6 +1129,7 @@ class MainWindow(BaseWindow):
             'ota_version': '查询中…',
             'main_version': '查询中…',
             'adb_status': '未知',
+            'adb_usb_status': '未知',
         }
 
     def on_device_row_updated(self, device_info):
@@ -1056,7 +1178,7 @@ class MainWindow(BaseWindow):
             parts.append("上线 " + ", ".join(f"{dev}({ip})" for dev, ip in added))
         if removed:
             parts.append("下线 " + ", ".join(f"{dev}({ip})" for dev, ip in removed))
-        self.log("- " + "；".join(parts))
+        self.log("- " + "；".join(parts), stamp=True)
 
         for device_id, _ip in removed:
             if self.device_list_view.remove_device(device_id):

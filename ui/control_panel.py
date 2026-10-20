@@ -14,6 +14,8 @@ class ControlPanel(QWidget):
     manual_find_clicked = pyqtSignal(str)
     enable_adb_clicked = pyqtSignal()
     clear_history_clicked = pyqtSignal()
+    stop_task_clicked = pyqtSignal()
+    resume_task_clicked = pyqtSignal()
     start_monitor_clicked = pyqtSignal(int, bool, bool, bool, bool, str)
     stop_monitor_clicked = pyqtSignal()
     query_selected_clicked = pyqtSignal(str)
@@ -201,8 +203,52 @@ class ControlPanel(QWidget):
         second_row_layout.addStretch()
         
         query_layout.addLayout(second_row_layout)
+
+        # 第三排：任务进度 + 中断 / 继续未完成
+        task_row_layout = QHBoxLayout()
+        self.task_status_label = QLabel("任务：空闲")
+        self.task_status_label.setMinimumWidth(360)
+        self.task_status_label.setStyleSheet("color: gray;")
+
+        self.stop_task_button = QPushButton("中断任务")
+        self.stop_task_button.setEnabled(False)
+        self.stop_task_button.setToolTip("停止派发新设备，已在执行的当台会正常收尾（不强杀线程）")
+        self.stop_task_button.clicked.connect(self.stop_task_clicked.emit)
+
+        self.resume_task_button = QPushButton("继续未完成")
+        self.resume_task_button.setEnabled(False)
+        self.resume_task_button.setToolTip("对上次被中断、尚未完成的设备继续执行")
+        self.resume_task_button.clicked.connect(self.resume_task_clicked.emit)
+
+        task_row_layout.addWidget(self.task_status_label)
+        task_row_layout.addWidget(self.stop_task_button)
+        task_row_layout.addWidget(self.resume_task_button)
+        task_row_layout.addStretch()
+        query_layout.addLayout(task_row_layout)
         
         parent_layout.addWidget(self.query_group)
+
+    # ---------------------------------------------------------------- 任务反馈
+
+    def update_task_status(self, text, is_error=False, is_warning=False):
+        """更新任务进度文案（「正在执行 截图 3/12…」）。"""
+        self.task_status_label.setText(text)
+        if is_error:
+            self.task_status_label.setStyleSheet("color: red;")
+        elif is_warning:
+            self.task_status_label.setStyleSheet("color: orange;")
+        else:
+            self.task_status_label.setStyleSheet("color: #1a7f37;")
+
+    def set_task_running(self, running):
+        """任务是否在进行中（决定「中断任务」按钮可用性）。"""
+        self.stop_task_button.setEnabled(bool(running))
+
+    def set_resume_available(self, available, count=0):
+        """是否有可续跑的未完成任务。"""
+        self.resume_task_button.setEnabled(bool(available))
+        self.resume_task_button.setText(
+            f"继续未完成（{count} 台）" if available and count else "继续未完成")
         
     def on_dev_type_changed(self, text):
         """设备类型改变时的处理"""

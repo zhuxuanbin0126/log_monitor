@@ -4,11 +4,14 @@ import threading
 from service.tool_service import ToolService
 from service.adb_service import ADBService
 from service.adb_device_manager import ADBDeviceManager
-from service.batch_dispatch import run_grouped
+from service.batch_dispatch import run_windowed
 from service.device_utils import is_android_device
 from service.logging_service import get_logger
 from service.protocol import get_device_status
-from config import LEGACY_QUERY_MAX_WORKERS, QUERY_GROUP_SIZE, QUERY_MAX_WORKERS
+from service.task_control import GLOBAL_TASK
+from config import (
+    LEGACY_QUERY_MAX_WORKERS, QUERY_MAX_WORKERS, SCREENSHOT_MAX_WORKERS,
+)
 from business.query_dispatcher import build_query_dispatch
 
 logger = get_logger(__name__)
@@ -117,6 +120,10 @@ class SerialQueryManager(QThread):
         """按「协议可用性」分池执行：协议池高并发，legacy（adb/SSH）池低并发。"""
         try:
             total_devices = len(self.devices_info)
+            # 一开始就登记任务：让「中断任务」按钮从第一秒起就可用
+            # （分池判定也可能耗时，不能等它结束才允许中断）
+            GLOBAL_TASK.begin(self.query_type, total_devices, list(self.devices_info))
+
             android_devices = [d for d in self.devices_info if is_android_device(d[0])]
             ssh_devices = [d for d in self.devices_info if not is_android_device(d[0])]
 
@@ -125,7 +132,7 @@ class SerialQueryManager(QThread):
                 "[串行管理器] 查询类型=%s，共 %s 台：协议池 %s 台（并发 %s）、"
                 "adb/SSH 池 %s 台（并发 %s）、SSH 串行 %s 台",
                 self.query_type, total_devices, len(protocol_devices),
-                min(len(protocol_devices), QUERY_MAX_WORKERS) or 0,
+                self._protocol_limit(len(protocol_devices)) or 0,
                 len(legacy_devices),
                 min(len(legacy_devices), LEGACY_QUERY_MAX_WORKERS) or 0,
                 len(ssh_devices),
@@ -134,7 +141,7 @@ class SerialQueryManager(QThread):
             # 协议池：每台设备独立 TCP，可安全高并发
             if protocol_devices:
                 self._process_parallel(protocol_devices, total_devices,
-                                      min(len(protocol_devices), QUERY_MAX_WORKERS))
+                                       self._protocol_limit(len(protocol_devices)))
 
             # legacy 池：走 adb/SSH，adb server 单进程，低并发避免相互干扰
             if legacy_devices:
@@ -143,20 +150,34 @@ class SerialQueryManager(QThread):
 
             # Linux 设备：SSH 串行
             base = len(protocol_devices) + len(legacy_devices)
-            for idx, (device_id, ip, password, system_type) in enumerate(ssh_devices):
-                if not self.is_running:
+            for idx, device_info in enumerate(ssh_devices):
+                if self._should_stop():
                     break
+                device_id, ip, password, system_type = device_info
                 logger.info(
                     "[串行管理器] 开始处理设备 %s/%s: %s (%s)",
                     idx + 1 + base, total_devices, device_id, ip)
                 self._set_state(self.STATE_CONNECTING, device_id)
+                GLOBAL_TASK.set_current(f"{device_id} ({ip})")
                 self.progress_signal.emit(idx + 1 + base, total_devices)
-                self._process_single_device(device_id, ip, password, system_type, needs_adb=False)
+                try:
+                    self._process_single_device(device_id, ip, password, system_type,
+                                                needs_adb=False)
+                finally:
+                    GLOBAL_TASK.mark_done(device_info)
 
             self.finished_signal.emit(total_devices)
 
         except Exception as e:
             self.error_signal.emit("Unknown", f"串行查询管理器出错: {str(e)}")
+        finally:
+            GLOBAL_TASK.finish()
+
+    def _protocol_limit(self, count):
+        """协议池并发上限：截图单台设备侧要 4~5s，单独放宽（见 config 说明）。"""
+        limit = (SCREENSHOT_MAX_WORKERS if self.query_type == "screenshot"
+                 else QUERY_MAX_WORKERS)
+        return min(count, limit)
 
     def _split_by_protocol(self, android_devices):
         """按「协议是否可用」把 Android 设备分成协议池与 legacy 池。
@@ -168,6 +189,10 @@ class SerialQueryManager(QThread):
             return [], list(android_devices)
         protocol_devices, legacy_devices = [], []
         for device in android_devices:
+            if self._should_stop():
+                # 中断时不再浪费建连超时，未判定的一律按 legacy 交给后续跳过
+                legacy_devices.append(device)
+                continue
             ip = device[1]
             try:
                 supported = get_device_status(ip) is not None
@@ -178,29 +203,41 @@ class SerialQueryManager(QThread):
         return protocol_devices, legacy_devices
 
     def _process_parallel(self, devices, total_devices, workers):
-        """分组限流地处理一批设备（每台内部自行决定走协议还是 adb/SSH）。
+        """**滑动窗口**并发处理一批设备（完成一台立刻补一台）。
 
-        组内并发受限、组间串行：把峰值负载钉在 ``QUERY_GROUP_SIZE`` 量级，
-        避免几十台设备同时执行时压垮 adb server / 网卡 / 设备端连接数。
+        旧实现按 8 台分组、组间串行：组里只要有一台慢设备（协议超时后降级 adb，
+        单台 15~17s），后面所有设备都要干等 —— 实测第 9 台要多等 8s。
+        现在并发上限仍受控（端口/连接数不放大），但不再有「整组等待」。
         """
         completed = [0]
         completed_lock = threading.Lock()
 
         def _handle_device(device_info):
             device_id, ip, password, system_type = device_info
+            self._set_state(self.STATE_CONNECTING, device_id)
+            GLOBAL_TASK.set_current(f"{device_id} ({ip})")
             try:
                 self._process_single_device(device_id, ip, password, system_type,
                                             needs_adb=is_android_device(device_id))
             finally:
+                GLOBAL_TASK.mark_done(device_info)
                 with completed_lock:
                     completed[0] += 1
                     current = completed[0]
                 self.progress_signal.emit(current, total_devices)
             return device_id
 
-        run_grouped(devices, _handle_device,
-                    group_size=QUERY_GROUP_SIZE, max_workers=workers,
-                    should_stop=lambda: not self.is_running)
+        run_windowed(
+            devices, _handle_device,
+            max_workers=workers,
+            should_stop=self._should_stop,
+            on_dispatch=lambda dispatched, total: logger.info(
+                "[串行管理器] 已派发 %s/%s 台（并发上限 %s）", dispatched, total, workers),
+        )
+
+    def _should_stop(self):
+        """本地停止（关窗/新任务）或**全局中断**任一成立即停止派发。"""
+        return (not self.is_running) or GLOBAL_TASK.should_stop()
     
     def _protocol_ready(self, device_id, ip):
         """该设备本次查询能否**完全**走协议（无需 adb/SSH 前置）。"""
