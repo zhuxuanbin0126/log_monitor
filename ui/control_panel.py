@@ -12,7 +12,6 @@ class ControlPanel(QWidget):
     # 定义信号
     refresh_clicked = pyqtSignal()
     dev_type_changed = pyqtSignal(str)
-    manual_find_clicked = pyqtSignal(str)
     enable_adb_clicked = pyqtSignal()
     clear_history_clicked = pyqtSignal()
     stop_task_clicked = pyqtSignal()
@@ -57,17 +56,21 @@ class ControlPanel(QWidget):
         self.refresh_button = QPushButton("刷新设备列表")
         self.refresh_button.clicked.connect(self.refresh_clicked.emit)
         
-        # 手动找卡：支持 单IP / 区间 / CIDR，以及逗号或空格分隔的多种组合
-        # （占位符放不下四种写法，完整范例放在 tooltip 与格式错误提示里）
-        self.manual_targets_label = QLabel("手动找卡:")
+        # 手动找卡：勾选后「刷新设备列表」按下面填写的目标定向扫描；
+        # 未勾选或目标为空时，等价于普通刷新（全网广播找卡）。
+        # 支持 单IP / 区间 / CIDR，以及逗号或空格分隔的多种组合。
+        self.manual_find_check = QCheckBox("手动找卡")
+        self.manual_find_check.setToolTip(
+            "勾选后按右侧目标定向找卡；目标为空时仍走普通刷新（广播找卡）")
+        self.manual_find_check.stateChanged.connect(self.on_manual_find_toggled)
+
         self.manual_targets_edit = QLineEdit()
         self.manual_targets_edit.setPlaceholderText(
             "如 192.168.80.6 ｜ 192.168.80.1-192.168.80.50 ｜ 192.168.80.0/24")
         self.manual_targets_edit.setToolTip(format_target_spec_hint())
-        self.manual_targets_edit.setMinimumWidth(200)
-        self.manual_targets_edit.returnPressed.connect(self.on_manual_find_clicked)
-        self.manual_find_button = QPushButton("手动找卡")
-        self.manual_find_button.clicked.connect(self.on_manual_find_clicked)
+        self.manual_targets_edit.setMinimumWidth(240)
+        self.manual_targets_edit.setEnabled(False)      # 未勾选时不可填（也不生效）
+        self.manual_targets_edit.returnPressed.connect(self.refresh_clicked.emit)
         
         # 添加刷新状态显示标签
         self.refresh_status_label = QLabel("就绪")
@@ -77,9 +80,8 @@ class ControlPanel(QWidget):
         top_row_layout.addWidget(self.dev_type_label)
         top_row_layout.addWidget(self.dev_type_combo)
         top_row_layout.addWidget(self.refresh_button)
-        top_row_layout.addWidget(self.manual_targets_label)
+        top_row_layout.addWidget(self.manual_find_check)
         top_row_layout.addWidget(self.manual_targets_edit)
-        top_row_layout.addWidget(self.manual_find_button)
         top_row_layout.addWidget(self.refresh_status_label)
         top_row_layout.addStretch()
         
@@ -247,17 +249,23 @@ class ControlPanel(QWidget):
         self.dev_type = text
         self.dev_type_changed.emit(text)
         
-    def on_manual_find_clicked(self):
-        """手动找卡按钮/回车事件：把输入的目标下发给上层。"""
-        targets = self.manual_targets_edit.text().strip()
-        if not targets:
-            # 空输入时把三种写法直接摆出来（完整范例见输入框 tooltip）
-            self.update_refresh_status(
-                "请输入目标：单个 IP（192.168.80.6）/ IP 区间（192.168.80.1-192.168.80.50）"
-                " / CIDR（192.168.80.0/24），也可组合", is_warning=True)
-            return
-        self.manual_find_clicked.emit(targets)
-        
+    def on_manual_find_toggled(self, state):
+        """勾选/取消「手动找卡」：目标输入框随之可用/禁用。"""
+        enabled = state == Qt.Checked
+        self.manual_targets_edit.setEnabled(enabled)
+        if enabled:
+            # 勾选后把焦点放进输入框，直接填目标（也可留空 → 等价普通刷新）
+            self.manual_targets_edit.setFocus()
+
+    def manual_find_enabled(self):
+        """是否启用手动找卡（勾选状态）。"""
+        return self.manual_find_check.isChecked()
+
+    def manual_targets(self):
+        """手动找卡目标（去空白）；未填写返回空串。"""
+        return self.manual_targets_edit.text().strip()
+
+
     def on_start_monitor_clicked(self):
         """开始监控按钮点击事件"""
         delay_time = self.delay_spin.value()
@@ -289,8 +297,10 @@ class ControlPanel(QWidget):
         # 禁用/启用其他控制
         self.refresh_button.setEnabled(not is_monitoring)
         self.dev_type_combo.setEnabled(not is_monitoring)
-        self.manual_targets_edit.setEnabled(not is_monitoring)
-        self.manual_find_button.setEnabled(not is_monitoring)
+        self.manual_find_check.setEnabled(not is_monitoring)
+        # 目标输入框只在「未监控 + 已勾选手动找卡」时可用
+        self.manual_targets_edit.setEnabled(
+            not is_monitoring and self.manual_find_check.isChecked())
         
         # 禁用/启用监控控制区域的所有按钮和复选框
         self.delay_spin.setEnabled(not is_monitoring)

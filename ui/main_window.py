@@ -109,7 +109,6 @@ class MainWindow(BaseWindow):
         """连接信号与槽"""
         # 控制面板信号连接
         self.control_panel.refresh_button.clicked.connect(self.refresh_device_list)
-        self.control_panel.manual_find_clicked.connect(self.manual_find_device_list)
         self.control_panel.enable_adb_clicked.connect(self.enable_adb_for_selected)
         self.control_panel.clear_history_clicked.connect(self.clear_history_data)
         self.control_panel.stop_task_clicked.connect(self.interrupt_tasks)
@@ -1129,45 +1128,41 @@ class MainWindow(BaseWindow):
         event.accept()
     
     def refresh_device_list(self):
-        """刷新设备列表 - 通过控制器异步执行，避免阻塞主线程"""
+        """刷新设备列表（统一入口）。
+
+        - 未勾选「手动找卡」：广播全网找卡（原行为）；
+        - 勾选但目标为空：等价于未勾选（仍走广播找卡），仅提示一行；
+        - 勾选且目标非空：按 IP / 区间 / CIDR / 组合定向扫描（广播兜底）。
+        """
+        manual_on = self.control_panel.manual_find_enabled()
+        targets = self.control_panel.manual_targets() if manual_on else ""
+        if manual_on and not targets:
+            self.log("已勾选「手动找卡」但目标为空 → 本次按普通刷新（广播找卡）执行",
+                     is_warning=True)
+            manual_on = False
+        if manual_on:
+            # 目标格式在**启动扫描前**先校验：格式不对就把四种写法回显到日志面板
+            from service.discovery.manual_finder import parse_ip_spec, format_target_spec_hint
+            try:
+                parse_ip_spec(targets)
+            except ValueError as exc:
+                self.log(f"手动找卡目标格式错误：{exc}\n{format_target_spec_hint()}",
+                         is_error=True)
+                self.control_panel.update_refresh_status(
+                    f"目标格式错误：{exc}（填写范例见日志面板）", is_error=True)
+                return
+            self.log(f"手动找卡（定向扫描）：{targets}")
+
         try:
             self.control_panel.refresh_button.setDisabled(True)
             # 暂停后台心跳：避免与本次扫描的探测包相互干扰
             self.background_discovery.stop()
             self.devices = []
             self._discovered_count = 0
-            self.refresh_controller.refresh(self.control_panel.dev_type)
+            self.refresh_controller.refresh(self.control_panel.dev_type,
+                                            targets if manual_on else None)
         except Exception as e:
             self.log(f"刷新设备列表失败: {str(e)}", is_error=True)
-            self.control_panel.refresh_button.setEnabled(True)
-
-    def manual_find_device_list(self, targets):
-        """手动找卡 - 按输入的 IP/区间/CIDR 定向扫描（广播兜底），异步执行。
-
-        目标格式在**启动扫描前**先校验：格式不对就直接把四种写法回显到日志面板，
-        不必等扫描线程起来再失败（用户可立刻改）。
-        """
-        targets = (targets or "").strip()
-        if not targets:
-            self.log("请输入手动找卡目标", is_warning=True)
-            return
-        from service.discovery.manual_finder import parse_ip_spec, format_target_spec_hint
-        try:
-            parse_ip_spec(targets)
-        except ValueError as exc:
-            self.log(f"手动找卡目标格式错误：{exc}\n{format_target_spec_hint()}", is_error=True)
-            self.control_panel.update_refresh_status(
-                f"目标格式错误：{exc}（填写范例见日志面板）", is_error=True)
-            return
-        try:
-            self.control_panel.refresh_button.setDisabled(True)
-            # 暂停后台心跳：避免与本次扫描的探测包相互干扰
-            self.background_discovery.stop()
-            self.devices = []
-            self._discovered_count = 0
-            self.refresh_controller.refresh(self.control_panel.dev_type, targets)
-        except Exception as e:
-            self.log(f"手动找卡失败: {str(e)}", is_error=True)
             self.control_panel.refresh_button.setEnabled(True)
 
     def enable_adb_for_selected(self):
