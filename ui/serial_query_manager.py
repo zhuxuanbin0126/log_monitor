@@ -120,9 +120,8 @@ class SerialQueryManager(QThread):
         """按「协议可用性」分池执行：协议池高并发，legacy（adb/SSH）池低并发。"""
         try:
             total_devices = len(self.devices_info)
-            # 一开始就登记任务：让「中断任务」按钮从第一秒起就可用
-            # （分池判定也可能耗时，不能等它结束才允许中断）
-            GLOBAL_TASK.begin(self.query_type, total_devices, list(self.devices_info))
+            # 任务登记由调用方在启动前完成（GLOBAL_TASK.begin），
+            # 这样「中断任务」在分池判定阶段就已可用。
 
             android_devices = [d for d in self.devices_info if is_android_device(d[0])]
             ssh_devices = [d for d in self.devices_info if not is_android_device(d[0])]

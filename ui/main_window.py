@@ -66,6 +66,7 @@ class MainWindow(BaseWindow):
         self.getdevice_num = 0
         self._discovered_count = 0
         self._task_started_at = None
+        self._task_started_wall = None
         self._monitor_started_at = None
         
         # 初始化日志文件
@@ -447,8 +448,8 @@ class MainWindow(BaseWindow):
 
         self.monitor_thread.start()
         self.control_panel.set_monitor_status(True)
-        self._refresh_task_button()
-        self.control_panel.update_task_status("任务：监控中")
+        self.control_panel.set_task_running(True)
+        self._set_task_status(f"任务：监控中（{len(selected_devices)} 台）")
 
         suffix = "，同时获取运行画面" if capture_screenshot else ""
         type_name = "所有类型的设备" if self.dev_type == 'A-B-C-D-H' else f"{self.dev_type} 类型设备"
@@ -491,9 +492,9 @@ class MainWindow(BaseWindow):
                            if self._monitor_started_at else "未知")
                 self._monitor_started_at = None
                 self.log(f"监控已停止（本次已运行 {elapsed}）", stamp=True)
-                self._refresh_task_button()
-                if not GLOBAL_TASK.is_active:
-                    self.control_panel.update_task_status("任务：空闲")
+                self.control_panel.set_task_running(self._any_task_running())
+                if not self._any_task_running():
+                    self._set_task_status("任务：空闲")
         except Exception as e:
             self.log(f"停止监控时出错: {str(e)}", is_error=True)
             # 无论如何都要确保按钮状态正确
@@ -646,9 +647,10 @@ class MainWindow(BaseWindow):
             self.serial_manager.stop()
             self.serial_manager.wait()
 
-        # 新一轮任务：清掉上一次的中断标志与剩余清单
-        GLOBAL_TASK.reset()
-        
+        # 注意：这里**不**清空任务状态。真正的登记在下面 GLOBAL_TASK.begin()，
+        # 它本身就会清掉上一轮的中断标志与剩余清单；若中途取消（如关掉了确认框），
+        # 上一次未完成的检查点仍然保留，用户还能「继续执行上一个任务」。
+
         # 初始化成功和失败设备列表
         self.successful_devices = []
         self.failed_devices = []
@@ -708,12 +710,16 @@ class MainWindow(BaseWindow):
         self.serial_manager.finished_signal.connect(self.close_csv_file)
         self.serial_manager.state_signal.connect(self.on_query_state)
         self.serial_manager.progress_signal.connect(self.on_task_progress)
+
+        # 在这里登记任务（而不是等线程跑起来）：保证「中断任务」从第一秒就可用
+        GLOBAL_TASK.begin(query_type, self.getdevice_num, list(devices_to_process))
         self.control_panel.set_resume_available(False)
-        self.control_panel.update_task_status(
+        self._set_task_status(
             f"任务：{self.query_presenter.query_type_text(query_type)} 0/{self.getdevice_num}")
         self._task_started_at = time.monotonic()
+        self._task_started_wall = datetime.now()
         self.serial_manager.start()
-        self._refresh_task_button()
+        self.control_panel.set_task_running(True)
         
         # 判断是查询还是操作
         op_text = self.query_presenter.query_type_text(query_type)
@@ -757,12 +763,13 @@ class MainWindow(BaseWindow):
             snapshot = GLOBAL_TASK.snapshot()
             remaining = snapshot.get('remaining') or []
             elapsed = self._task_elapsed()
+            duration_text = self._task_duration_text(elapsed)
             if remaining:
                 # 被中断：明确告知完成了多少、还剩多少、怎么续跑
                 self.log(
                     f"任务已中断：完成 {snapshot['done']}/{snapshot['total']} 台，"
-                    f"剩余 {len(remaining)} 台未执行，耗时 {elapsed} "
-                    f"—— 可点击「继续未完成」从断点继续",
+                    f"剩余 {len(remaining)} 台未执行，耗时 {duration_text} "
+                    f"—— 可点击「继续执行上一个任务」从断点继续",
                     is_warning=True, stamp=True)
             # 显示汇总信息（监控任务的查询和截图不显示汇总）
             if not (self.monitor_thread and self.monitor_thread.isRunning()):
@@ -772,27 +779,32 @@ class MainWindow(BaseWindow):
                     self.successful_devices,
                     self.failed_devices,
                     self.not_applicable_devices,
-                    elapsed=elapsed,
+                    elapsed=duration_text,
                 )
-            # 更新状态栏提示
-            op_text = self.query_presenter.query_type_text(self.current_query_type)
-            self.update_status_bar(
-                f"已完成 {self.getdevice_num} 台设备 {op_text}（耗时 {elapsed}）")
             self.control_panel.set_resume_available(bool(remaining), len(remaining))
-            self.control_panel.update_task_status(
+            self._set_task_status(
                 f"任务：已中断（{snapshot['done']}/{snapshot['total']}，"
-                f"剩余 {len(remaining)} 台）" if remaining
+                f"剩余 {len(remaining)} 台，耗时 {elapsed}）" if remaining
                 else f"任务：已完成（{snapshot['total']} 台，耗时 {elapsed}）",
                 is_warning=bool(remaining),
             )
             self._task_started_at = None
-            self._refresh_task_button()
+            self._task_started_wall = None
+            self.control_panel.set_task_running(self._other_tasks_running())
 
     def _task_elapsed(self):
         """当前任务已耗时；没记录开始时间时返回「未知」。"""
         if self._task_started_at is None:
             return "未知"
         return self._format_duration(time.monotonic() - self._task_started_at)
+
+    def _task_duration_text(self, elapsed):
+        """耗时文案：``25.3s（17:09:37 → 17:10:02）``，便于直接核对起止时刻。"""
+        if not self._task_started_wall:
+            return elapsed
+        started = self._task_started_wall.strftime('%H:%M:%S')
+        finished = datetime.now().strftime('%H:%M:%S')
+        return f"{elapsed}（{started} → {finished}）"
 
     @staticmethod
     def _format_duration(seconds):
@@ -808,16 +820,23 @@ class MainWindow(BaseWindow):
             return f"{hours}时{minutes:02d}分{secs:02d}秒"
         return f"{minutes}分{secs:02d}秒"
 
-    # ---------------------------------------------------------------- 任务中断 / 续跑
+    # ---------------------------------------------------------------- 任务状态 / 中断 / 续跑
 
-    def _refresh_task_button(self):
-        """「中断任务」可用性：只要有任意耗时任务在跑就允许中断。"""
-        busy = bool(
-            GLOBAL_TASK.is_active
-            or (self.enable_adb_worker and self.enable_adb_worker.isRunning())
+    def _set_task_status(self, text, is_warning=False):
+        """任务状态统一显示在**左下角状态栏**（与系统运行状态合并，不再单独占一行）。"""
+        self.statusBar().setStyleSheet("color: #e67e22;" if is_warning else "")
+        self.update_status_bar(text)
+
+    def _other_tasks_running(self):
+        """除串行查询外，其它耗时任务是否还在跑。"""
+        return bool(
+            (self.enable_adb_worker and self.enable_adb_worker.isRunning())
             or (self.clear_history_worker and self.clear_history_worker.isRunning())
             or (self.monitor_thread and self.monitor_thread.isRunning()))
-        self.control_panel.set_task_running(busy)
+
+    def _any_task_running(self):
+        """是否有任意耗时任务在跑（决定「中断任务」是否可用）。"""
+        return bool(GLOBAL_TASK.is_active or self._other_tasks_running())
 
     def _restore_pending_task(self):
         """启动时恢复上次未完成的任务（检查点由 ``GLOBAL_TASK`` 落盘）。"""
@@ -827,12 +846,12 @@ class MainWindow(BaseWindow):
             return
         label = self.query_presenter.query_type_text(snapshot.get('label') or '')
         self.control_panel.set_resume_available(True, len(remaining))
-        self.control_panel.update_task_status(
+        self._set_task_status(
             f"任务：有未完成的{label}（剩余 {len(remaining)}/{snapshot.get('total')} 台），"
-            f"可点击「继续未完成」", is_warning=True)
+            f"可点击「继续执行上一个任务」", is_warning=True)
         self.log(
             f"发现上次未完成的{label}：已完成 {snapshot.get('done')}/{snapshot.get('total')} 台，"
-            f"剩余 {len(remaining)} 台，可点击「继续未完成」从断点继续", stamp=True)
+            f"剩余 {len(remaining)} 台，可点击「继续执行上一个任务」从断点继续", stamp=True)
 
     def on_task_progress(self, done, total):
         """串行管理器每完成一台就回报：刷新「正在执行 x/y」提示。"""
@@ -842,11 +861,11 @@ class MainWindow(BaseWindow):
         current = snapshot.get('current') or ''
         suffix = f"（当前：{current}）" if current else ""
         if snapshot.get('stopped'):
-            self.control_panel.update_task_status(
+            self._set_task_status(
                 f"任务：{op_text} 正在中断… 已完成 {done}/{total}{suffix}", is_warning=True)
         else:
-            self.control_panel.update_task_status(
-                f"任务：{op_text} 已完成 {done}/{total}{suffix}")
+            self._set_task_status(
+                f"任务：{op_text} 执行中 {done}/{total}{suffix}")
 
     def interrupt_tasks(self):
         """中断**所有**正在执行的耗时任务（不关闭应用、不强杀线程）。
@@ -880,11 +899,11 @@ class MainWindow(BaseWindow):
         if monitoring:
             self.stop_monitor()
         if "查询/控制任务" in acted:
-            self.control_panel.update_task_status(
+            self._set_task_status(
                 f"任务：{self.query_presenter.query_type_text(summary.get('label') or '')}"
                 f" 正在中断… 已完成 {summary['done']}/{summary['total']}", is_warning=True)
         else:
-            self.control_panel.update_task_status(
+            self._set_task_status(
                 f"任务：正在中断（{'、'.join(acted)}）", is_warning=True)
 
     def resume_last_task(self):
@@ -905,7 +924,7 @@ class MainWindow(BaseWindow):
         if query_type in ('count_init', 'upgrade_program'):
             self.log("该任务带有自定义文件路径，暂不支持断点续跑，请重新发起", is_warning=True)
             return
-        self.log(f"继续未完成任务：{self.query_presenter.query_type_text(query_type)}，"
+        self.log(f"继续执行上一个任务：{self.query_presenter.query_type_text(query_type)}，"
                  f"剩余 {len(remaining)} 台", stamp=True)
         devices = [tuple(item) for item in remaining if isinstance(item, (list, tuple))]
         if not devices:
@@ -1018,8 +1037,8 @@ class MainWindow(BaseWindow):
         self.clear_history_worker.item_done.connect(self.on_clear_history_item)
         self.clear_history_worker.finished_signal.connect(self.on_clear_history_finished)
         self.clear_history_worker.start()
-        self._refresh_task_button()
-        self.control_panel.update_task_status("任务：清理历史数据中")
+        self.control_panel.set_task_running(True)
+        self._set_task_status(f"任务：清理历史数据中（{summary['items']} 个条目）")
 
     def on_clear_history_item(self, result):
         """单条目清理完成：逐项回报（可审计）。"""
@@ -1044,9 +1063,13 @@ class MainWindow(BaseWindow):
         except Exception as e:
             logger.debug("[清理] 重新加载监控数据失败: %s", e)
         self.control_panel.clear_history_button.setEnabled(True)
-        self._refresh_task_button()
-        if not (self.monitor_thread and self.monitor_thread.isRunning()) and not GLOBAL_TASK.is_active:
-            self.control_panel.update_task_status("任务：空闲")
+        # 本任务刚结束，故只按「其它任务」判定按钮状态
+        self.control_panel.set_task_running(
+            bool(GLOBAL_TASK.is_active
+                 or (self.enable_adb_worker and self.enable_adb_worker.isRunning())
+                 or (self.monitor_thread and self.monitor_thread.isRunning())))
+        if not self._any_task_running():
+            self._set_task_status("任务：空闲")
 
     def closeEvent(self, event):
         """
@@ -1139,8 +1162,8 @@ class MainWindow(BaseWindow):
         self.enable_adb_worker.device_done.connect(self.on_enable_adb_device_done)
         self.enable_adb_worker.finished_signal.connect(self.on_enable_adb_finished)
         self.enable_adb_worker.start()
-        self._refresh_task_button()
-        self.control_panel.update_task_status("任务：批量开启 ADB 中")
+        self.control_panel.set_task_running(True)
+        self._set_task_status(f"任务：批量开启 ADB 中（{len(targets)} 台）")
 
     def on_enable_adb_device_done(self, device_id, ok, message):
         """单台设备开启 ADB 完成：刷新表格与内存数据。"""
@@ -1161,9 +1184,13 @@ class MainWindow(BaseWindow):
         suffix = "（已中断，未轮到的设备未处理）" if interrupted else ""
         self.log(f"开启 ADB 完成：成功 {ok_count}/{total}{suffix}", stamp=True)
         self.enable_adb_worker = None
-        self._refresh_task_button()
-        if not (self.monitor_thread and self.monitor_thread.isRunning()) and not GLOBAL_TASK.is_active:
-            self.control_panel.update_task_status("任务：空闲")
+        # 本任务刚结束，故只按「其它任务」判定按钮状态
+        self.control_panel.set_task_running(
+            bool(GLOBAL_TASK.is_active
+                 or (self.clear_history_worker and self.clear_history_worker.isRunning())
+                 or (self.monitor_thread and self.monitor_thread.isRunning())))
+        if not self._any_task_running():
+            self._set_task_status("任务：空闲")
 
     def on_device_found(self, device_id, ip):
         """找卡「发现即上报」：**立即**插入占位行（先显示设备ID/IP），详情随后补全。
