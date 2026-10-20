@@ -161,3 +161,79 @@ def test_file_exists_single_command(monkeypatch):
 
     assert ssh.file_exists("10.0.0.6", "pwd", "/data/a.csv") is True
     assert seen == ["test -f /data/a.csv && echo YES"]
+
+
+# ---------------------------------------------------------------- SFTP 文件传输
+
+class _FakeSftp:
+    def __init__(self):
+        self.puts = []
+        self.gets = []
+
+    def put(self, local_file, remote_file):
+        self.puts.append((local_file, remote_file))
+
+    def get(self, remote_file, local_file):
+        self.gets.append((remote_file, local_file))
+
+    def close(self):
+        return None
+
+
+class _SftpClient(_FakeClient):
+    def __init__(self, fail_sftp=False):
+        super().__init__()
+        self.sftp = _FakeSftp()
+        self.fail_sftp = fail_sftp
+
+    def open_sftp(self):
+        if self.fail_sftp:
+            raise OSError("sftp subsystem disabled")
+        return self.sftp
+
+
+def test_put_file_reuses_one_connection(monkeypatch, tmp_path):
+    _reset()
+    client = _SftpClient()
+    created = []
+    monkeypatch.setattr(ssh, "paramiko_available", lambda: True)
+    monkeypatch.setattr(ssh, "_connect",
+                        lambda host, password: (created.append(host), client)[1])
+    local = tmp_path / "run.sh"
+    local.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert ssh.put_file("10.0.0.7", "pwd", str(local), "/root/Box/run.sh")[2] == 0
+    assert ssh.put_file("10.0.0.7", "pwd", str(local), "/root/boot_counter.sh")[2] == 0
+
+    assert len(created) == 1                         # 两次上传只建连一次
+    assert client.sftp.puts == [
+        (str(local), "/root/Box/run.sh"),
+        (str(local), "/root/boot_counter.sh"),
+    ]
+
+
+def test_put_file_falls_back_to_pscp(monkeypatch, tmp_path):
+    _reset()
+    client = _SftpClient(fail_sftp=True)
+    _patch_paramiko(monkeypatch, client)
+    local = tmp_path / "run.sh"
+    local.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    calls = []
+    monkeypatch.setattr(ssh, "run_command",
+                        lambda cmd, timeout=None: (calls.append(cmd), ("", "", 0))[1])
+
+    assert ssh.put_file("10.0.0.8", "pwd", str(local), "/root/Box/run.sh")[2] == 0
+    assert len(calls) == 1 and "pscp" in calls[0]
+
+
+def test_get_file_creates_local_folder(monkeypatch, tmp_path):
+    _reset()
+    client = _SftpClient()
+    _patch_paramiko(monkeypatch, client)
+    target = tmp_path / "switch_log" / "C16L-1" / "swich_counter.csv"
+
+    assert ssh.get_file("10.0.0.9", "pwd", "/root/data/swich_counter.csv",
+                        str(target))[2] == 0
+    assert target.parent.is_dir()
+    assert client.sftp.gets == [("/root/data/swich_counter.csv", str(target))]

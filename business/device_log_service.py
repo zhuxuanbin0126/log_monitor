@@ -152,52 +152,47 @@ class DeviceLogService:
 
     @staticmethod
     def clean_switch_log(ip, password, device_id, path):
-        """清除开关机日志，使用传入的 path 参数（由 get_device_remote_path 统一决定）
+        """清除开关机日志（**一条命令删完并在同一条命令里回读**）。
 
-        对于 Android 设备，shell 用户可能无权删除 /data/ 下 root/system 拥有的文件。
-        策略：先尝试普通 rm，文件残留时尝试 adb root + 重试删除。
+        旧实现逐条执行 5 个命令 → ``sleep(1)`` → 对两个文件各查一次存在性，
+        单台 7~8 次往返；现在合并为「删除 + sync + 回读」一次，
+        只有确实残留时才再补一次（Android 还会尝试 adb root 提权）。
         """
         try:
-            delete_path = path
             is_android = ToolService.is_android_device(device_id)
+            switch_file = f"{path}/swich_counter.csv"
+            network_file = f"{path}/network_counter.csv"
 
-            cmd = f"rm -f {delete_path}/swich_counter.csv"
-            ToolService.execute_command(device_id, ip, password, cmd, ".")
-            cmd = f"rm -f {delete_path}/network_counter.csv"
-            ToolService.execute_command(device_id, ip, password, cmd, ".")
-            cmd = f"rm -rf {delete_path}/logcat"
-            ToolService.execute_command(device_id, ip, password, cmd, ".")
-            cmd = f"rm -rf {delete_path}/ping"
-            ToolService.execute_command(device_id, ip, password, cmd, ".")
-            cmd = "sync"
-            ToolService.execute_command(device_id, ip, password, cmd, ".")
+            def _clean_and_report():
+                """删除 + sync + 回读；返回 (stdout, stderr)。"""
+                command = (
+                    f"rm -f {switch_file}; rm -f {network_file}; "
+                    f"rm -rf {path}/logcat; rm -rf {path}/ping; sync; "
+                    f"[ -e {switch_file} ] && echo SW_EXISTS; "
+                    f"[ -e {network_file} ] && echo NET_EXISTS; echo CLEAN_DONE"
+                )
+                stdout, stderr, _rc = ToolService.execute_command(
+                    device_id, ip, password, command, ".")
+                return stdout or "", stderr or ""
 
-            time.sleep(1)
+            stdout, stderr = _clean_and_report()
+            if "CLEAN_DONE" not in stdout:
+                return False, (f"{device_id} 清除失败: 设备无响应"
+                               f"（{stderr or '无输出'}）")
 
-            switch_exists = ToolService.check_file_exists(device_id, ip, password, f"{delete_path}/swich_counter.csv", max_retries=1)
-            network_exists = ToolService.check_file_exists(device_id, ip, password, f"{delete_path}/network_counter.csv", max_retries=1)
+            if "SW_EXISTS" in stdout or "NET_EXISTS" in stdout:
+                # 文件残留 → Android 尝试 adb root 提权；Linux 直接重试一次
+                if is_android:
+                    root_ok = DeviceLogService._try_root_delete(
+                        ip, password, device_id, path)
+                    if not root_ok:
+                        return False, (f"{device_id} 清除失败: 文件受权限保护"
+                                       f"(shell用户无权删除)，adb root 不可用")
+                stdout, _stderr = _clean_and_report()
+                if "SW_EXISTS" in stdout or "NET_EXISTS" in stdout:
+                    return False, f"{device_id} 清除失败: 文件仍存在（{path}）"
 
-            # 文件残留 → Android 设备尝试 adb root 提权后重新删除
-            if (switch_exists or network_exists) and is_android:
-                root_ok = DeviceLogService._try_root_delete(ip, password, device_id, delete_path)
-                if not root_ok:
-                    return False, f"{device_id} 清除失败: 文件受权限保护(shell用户无权删除)，adb root 不可用"
-                # root 删除后重新检查
-                time.sleep(1)
-                switch_exists = ToolService.check_file_exists(device_id, ip, password, f"{delete_path}/swich_counter.csv", max_retries=1)
-                network_exists = ToolService.check_file_exists(device_id, ip, password, f"{delete_path}/network_counter.csv", max_retries=1)
-            elif switch_exists or network_exists:
-                # Linux 设备：重试一次普通删除
-                if switch_exists:
-                    cmd = f"rm -f {delete_path}/swich_counter.csv"
-                    ToolService.execute_command(device_id, ip, password, cmd, ".")
-                if network_exists:
-                    cmd = f"rm -f {delete_path}/network_counter.csv"
-                    ToolService.execute_command(device_id, ip, password, cmd, ".")
-                cmd = "sync"
-                ToolService.execute_command(device_id, ip, password, cmd, ".")
-                time.sleep(1)
-
+            logger.info("[开关机计数] %s 开关机日志已清除（%s）", device_id, path)
             return True, f"{device_id} 开关机记录已清除"
         except Exception as e:
             return False, f"{device_id} 清除累计开机次数失败 - {str(e)}"

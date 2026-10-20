@@ -151,54 +151,30 @@ class DeviceMonitorService:
                             else:
                                 steps.append(f"{local_file}执行权限设置完成")
             
-            # 2. 执行额外命令
+            # 2. 额外命令 + flag 创建 + sync 合并成**一条**远端命令（少 N 次往返）
             if not error:
-                for cmd in init_config.get("extra_commands", []):
-                    stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, cmd, ".")
-                    if stderr or returncode != 0:
-                        error = f"执行命令失败 '{cmd}': {stderr}"
-                        break
-                    else:
-                        steps.append(f"执行命令成功: {cmd}")
-            
-            # 3. 创建flag文件
-            flag_path = init_config.get("flag_path", "")
-            if not error and flag_path:
-                flag_cmd = f"touch {flag_path}/swich_counter_flag"
-                stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, flag_cmd, ".")
-                if stderr or returncode != 0:
-                    error = f"创建swich_counter_flag失败: {stderr}"
-                else:
-                    steps.append("swich_counter_flag创建成功")
+                flag_path = init_config.get("flag_path", "")
+                batch = list(init_config.get("extra_commands", []))
+                if flag_path:
+                    batch.append(f"touch {flag_path}/swich_counter_flag")
                     files_to_check.append(f"{flag_path}/swich_counter_flag")
+                batch.append("sync")
+                command = " && ".join(batch)
+                stdout, stderr, returncode = ToolService.execute_command(
+                    device_id, ip, password, command, ".")
+                if returncode != 0:
+                    error = f"执行命令失败 '{command}': {stderr or '返回码 %s' % returncode}"
+                else:
+                    steps.append("脚本授权 / flag 创建 / sync 完成")
             
-            # 4. 执行sync同步
-            if not error:
-                stdout, stderr, returncode = ToolService.execute_command(device_id, ip, password, "sync", ".")
-                steps.append("sync执行成功")
-            
-            # 5. 验证文件是否存在
+            # 3. 验证文件是否存在（**一次往返**校验全部文件，必要时重试一次）
             if not error and files_to_check:
-                missing_files = []
-                for file_path in files_to_check:
-                    time.sleep(0.3)
-                    exists = False
-                    for attempt in range(3):
-                        try:
-                            exists = ToolService.check_file_exists(device_id, ip, password, file_path)
-                            if exists:
-                                break
-                            if attempt < 2:
-                                time.sleep(0.5)
-                        except Exception as e:
-                            if attempt < 2:
-                                time.sleep(0.5)
-                    
-                    if not exists:
-                        missing_files.append(file_path)
-                
-                if missing_files:
-                    error = f"文件验证失败，以下文件不存在: {', '.join(missing_files)}"
+                missing = self._missing_remote_files(device_id, ip, password, files_to_check)
+                if missing:
+                    time.sleep(0.5)
+                    missing = self._missing_remote_files(device_id, ip, password, files_to_check)
+                if missing:
+                    error = f"文件验证失败，以下文件不存在: {', '.join(missing)}"
                 else:
                     steps.append("文件验证成功")
             
@@ -212,6 +188,32 @@ class DeviceMonitorService:
                 
         except Exception as e:
             return OperationResult(False, error=f"{device_id} 设置开关机失败 - {str(e)}")
+
+    @staticmethod
+    def _missing_remote_files(device_id, ip, password, paths):
+        """**一次往返**校验多个远端文件是否存在，返回缺失清单（空 = 全部存在）。
+
+        旧实现每个文件一次 ``check_file_exists``（还带 3 次重试与 sleep），
+        4 个文件就要 4 次往返 + 约 2s 等待；这里合成一条 ``test -e`` 命令。
+        通道无任何输出时按「全部未验证」处理，避免误判成功。
+        """
+        checks = "; ".join(
+            f"[ -e {path} ] && echo 'OK {index}' || echo 'MISS {index}'"
+            for index, path in enumerate(paths))
+        stdout, _stderr, _rc = ToolService.execute_command(
+            device_id, ip, password, checks, ".")
+
+        missing = []
+        answered = False
+        for line in (stdout or "").splitlines():
+            parts = line.strip().split()
+            if len(parts) != 2 or not parts[1].isdigit():
+                continue
+            answered = True
+            index = int(parts[1])
+            if parts[0] == "MISS" and index < len(paths):
+                missing.append(paths[index])
+        return list(paths) if not answered else missing
 
     def sum_switch_count(self, ip, password, device_id, path):
         """设备累计开机次数"""
@@ -379,14 +381,23 @@ class DeviceMonitorService:
             for cmd in pre_commands:
                 ToolService.execute_command(device_id, ip, password, cmd, ".")
             
-            # 推送节目文件
-            ToolService.push_file(device_id, ip, password, local_program, f"{remote_dir}/project.tar.gz")
+            # 推送节目文件（Linux 走 SFTP 复用连接，Android 走 adb push）
+            stdout, stderr, returncode = ToolService.push_file(
+                device_id, ip, password, local_program, f"{remote_dir}/project.tar.gz")
+            if returncode != 0:
+                return OperationResult(
+                    False, error=f"{device_id} 推送节目失败 - {stderr or '返回码 %s' % returncode}")
+            if stderr:
+                logger.info("设备 %s 推送节目完成但有提示: %s", device_id, stderr)
             
-            # 解压节目文件
-            ToolService.execute_command(device_id, ip, password, f"tar -zxf {remote_dir}/project.tar.gz -C {remote_dir}", ".")
-            
-            # 删除压缩包
-            ToolService.execute_command(device_id, ip, password, f"rm {remote_dir}/project.tar.gz", ".")
+            # 解压 + 清理压缩包合并为**一条**命令（少一次往返；解压失败不重启播放器）
+            extract_cmd = (f"tar -zxf {remote_dir}/project.tar.gz -C {remote_dir} "
+                           f"&& rm -f {remote_dir}/project.tar.gz")
+            stdout, stderr, returncode = ToolService.execute_command(
+                device_id, ip, password, extract_cmd, ".")
+            if returncode != 0:
+                return OperationResult(
+                    False, error=f"{device_id} 解压节目失败 - {stderr or '返回码 %s' % returncode}")
             
             # 重启播放器
             ToolService.execute_command(device_id, ip, password, restart_cmd, ".")

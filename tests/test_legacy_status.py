@@ -1,4 +1,4 @@
-"""SSH/ADB 通道「一次往返取回 设备时间 + 运行时长」的离线单测（不触网）。"""
+"""Linux/SSH 通道的「一次往返」优化测试（合并取数、批量文件校验，不触网）。"""
 
 from datetime import datetime
 
@@ -69,3 +69,33 @@ def test_legacy_status_reports_error_when_output_unparsable(monkeypatch, tmp_pat
     info = service.get_uptime_info("10.9.9.3", "pwd", "H16-00-0003")
     assert info["formatted_uptime"] == "N/A"
     assert "error" in info
+
+
+# ---------------------------------------------------------------- 批量文件校验（一次往返）
+
+def test_missing_remote_files_single_round_trip(monkeypatch):
+    calls = []
+
+    def _fake(device_id, ip, password, command, base_dir="."):
+        calls.append(command)
+        return "OK 0\nMISS 1\nOK 2\n", "", 0
+
+    monkeypatch.setattr(dms.ToolService, "execute_command", staticmethod(_fake))
+
+    paths = ["/root/a.sh", "/root/b.sh", "/root/Box/project/flag"]
+    missing = dms.DeviceMonitorService._missing_remote_files(
+        "D16-DB00-A0045", "10.0.0.9", "pwd", paths)
+
+    assert missing == ["/root/b.sh"]
+    assert len(calls) == 1                      # 3 个文件只查一次
+    assert "test" not in calls[0] and "[ -e" in calls[0]
+
+
+def test_missing_remote_files_reports_all_when_channel_silent(monkeypatch):
+    """通道无任何回显 → 视为全部未验证，不能误判成功。"""
+    monkeypatch.setattr(dms.ToolService, "execute_command",
+                        staticmethod(lambda *_a, **_kw: ("", "timeout", 255)))
+
+    paths = ["/root/a.sh", "/root/b.sh"]
+    assert dms.DeviceMonitorService._missing_remote_files(
+        "D16-DB00-A0045", "10.0.0.9", "pwd", paths) == paths

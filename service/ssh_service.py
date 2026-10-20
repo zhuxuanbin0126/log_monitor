@@ -240,3 +240,94 @@ def file_exists(host: str, password: str, remote_file: str) -> bool:
     if returncode != 0:
         return False
     return "YES" in (stdout or "")
+
+
+# ---------------------------------------------------------------- 文件传输（SFTP / pscp）
+
+def _sftp_put(client, local_file: str, remote_file: str) -> None:
+    sftp = client.open_sftp()
+    try:
+        sftp.put(local_file, remote_file)
+    finally:
+        sftp.close()
+
+
+def _sftp_get(client, remote_file: str, local_file: str) -> None:
+    sftp = client.open_sftp()
+    try:
+        sftp.get(remote_file, local_file)
+    finally:
+        sftp.close()
+
+
+def _pscp_command(action: str, password: str, first: str, second: str) -> str:
+    pscp_exe = get_tool_path('pscp.exe')
+    if action == "put":
+        return f'{pscp_exe} -batch -pw "{password}" "{first}" root@{second}'
+    return f'{pscp_exe} -batch -pw "{password}" root@{first} "{second}"'
+
+
+def _pscp_put(host: str, password: str, local_file: str, remote_file: str):
+    """pscp 上传（回退通道）：主机密钥未缓存时就地接受一次再补发。"""
+    cmd = _pscp_command("put", password, local_file, f"{host}:{remote_file}")
+    stdout, stderr, returncode = run_command(cmd)
+    if returncode != 0 and is_host_key_error(stderr):
+        accept_host_key(host, password)
+        return run_command(cmd)
+    return stdout, stderr, returncode
+
+
+def _pscp_get(host: str, password: str, remote_file: str, local_file: str):
+    """pscp 下载（回退通道）：同上，主机密钥未缓存时就地接受一次再补发。"""
+    cmd = _pscp_command("get", password, f"{host}:{remote_file}", local_file)
+    stdout, stderr, returncode = run_command(cmd)
+    if returncode != 0 and is_host_key_error(stderr):
+        accept_host_key(host, password)
+        return run_command(cmd)
+    return stdout, stderr, returncode
+
+
+def put_file(host: str, password: str, local_file: str, remote_file: str):
+    """把本地文件传到设备：**paramiko SFTP（复用连接）** → pscp 单次回退。
+
+    与「每条命令都新起一个 pscp 进程」相比，SFTP 复用已认证的 SSH 连接，
+    单文件省 0.3~1s；批量推 rc/脚本/节目包时收益叠加。
+
+    Returns:
+        ``(stdout, stderr, returncode)``，与 pscp 口径一致（成功为 ``("", "", 0)``）。
+    """
+    if paramiko_available():
+        try:
+            client = _acquire(host, password)
+            _sftp_put(client, local_file, remote_file)
+            with _POOL_LOCK:
+                entry = _POOL.get((host, password))
+                if entry is not None:
+                    entry.last_used = time.monotonic()
+            logger.debug("[SSH] SFTP 已上传 %s -> %s:%s", local_file, host, remote_file)
+            return "", "", 0
+        except Exception as exc:  # pylint: disable=broad-except
+            _drop(host, password)
+            logger.info("[SSH] SFTP 上传 %s 失败（%s），改用 pscp 单次尝试", host, exc)
+    return _pscp_put(host, password, local_file, remote_file)
+
+
+def get_file(host: str, password: str, remote_file: str, local_file: str):
+    """从设备取文件：**paramiko SFTP（复用连接）** → pscp 单次回退。"""
+    folder = os.path.dirname(local_file)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    if paramiko_available():
+        try:
+            client = _acquire(host, password)
+            _sftp_get(client, remote_file, local_file)
+            with _POOL_LOCK:
+                entry = _POOL.get((host, password))
+                if entry is not None:
+                    entry.last_used = time.monotonic()
+            logger.debug("[SSH] SFTP 已下载 %s:%s -> %s", host, remote_file, local_file)
+            return "", "", 0
+        except Exception as exc:  # pylint: disable=broad-except
+            _drop(host, password)
+            logger.info("[SSH] SFTP 下载 %s 失败（%s），改用 pscp 单次尝试", host, exc)
+    return _pscp_get(host, password, remote_file, local_file)

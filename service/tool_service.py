@@ -479,8 +479,8 @@ class ToolService:
             else:
                 return ToolService.adb_push_file(ip, password, local_file, remote_file, device_id=device_id)
         else:
-            # Linux设备使用PSCP
-            return ToolService.pscp_push_file(ip, password, local_file, remote_file)
+            # Linux 设备：SFTP 复用已认证的 SSH 连接（pscp 作为回退）
+            return ssh_service.put_file(ip, password, local_file, remote_file)
 
     @staticmethod
     def pull_file(device_id, ip, password, remote_file, local_file):
@@ -501,39 +501,18 @@ class ToolService:
             # Android设备使用ADB pull
             return ToolService.adb_pull_file(ip, remote_file, local_file, device_id=device_id, password=password)
         else:
-            # Linux设备使用PSCP
-            return ToolService.pscp_pull_file(ip, password, remote_file, local_file)
+            # Linux 设备：SFTP 复用已认证的 SSH 连接（pscp 作为回退）
+            return ssh_service.get_file(ip, password, remote_file, local_file)
 
     @staticmethod
     def pscp_push_file(ip, password, local_file, remote_file):
-        """
-        使用pscp推送文件到Linux设备，返回stdout/stderr/returncode
-
-        首次连某台设备时 pscp 也会因「主机密钥未缓存」失败 —— **就地**接受一次
-        （与 ssh_service 同源），再补发一次，不做多轮重试。
-        """
-        pscp_exe = ToolService.get_tool_path('pscp.exe')
-        cmd = f"{pscp_exe} -batch -pw \"{password}\" \"{local_file}\" root@{ip}:{remote_file}"
-        stdout, stderr, returncode = ToolService.run_command(cmd)
-        if returncode != 0 and ssh_service.is_host_key_error(stderr):
-            ssh_service.accept_host_key(ip, password)
-            return ToolService.run_command(cmd)
-        return stdout, stderr, returncode
+        """（兼容旧调用）优先 SFTP、回退 pscp，实现见 :func:`service.ssh_service.put_file`。"""
+        return ssh_service.put_file(ip, password, local_file, remote_file)
 
     @staticmethod
     def pscp_pull_file(ip, password, remote_file, local_file):
-        """
-        使用pscp从Linux设备拉取文件，返回stdout/stderr/returncode
-
-        （主机密钥未缓存时同 :meth:`pscp_push_file`：就地接受一次再补发）
-        """
-        pscp_exe = ToolService.get_tool_path('pscp.exe')
-        cmd = f"{pscp_exe} -batch -pw \"{password}\" root@{ip}:{remote_file} \"{local_file}\""
-        stdout, stderr, returncode = ToolService.run_command(cmd)
-        if returncode != 0 and ssh_service.is_host_key_error(stderr):
-            ssh_service.accept_host_key(ip, password)
-            return ToolService.run_command(cmd)
-        return stdout, stderr, returncode
+        """（兼容旧调用）优先 SFTP、回退 pscp，实现见 :func:`service.ssh_service.get_file`。"""
+        return ssh_service.get_file(ip, password, remote_file, local_file)
 
     @staticmethod
     def adb_screencap(ip, remote_file):
