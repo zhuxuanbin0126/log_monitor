@@ -4,6 +4,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from config import default_dev_type, supported_dev_types
+from service.discovery.manual_finder import format_target_spec_hint
 
 
 class ControlPanel(QWidget):
@@ -56,10 +57,13 @@ class ControlPanel(QWidget):
         self.refresh_button = QPushButton("刷新设备列表")
         self.refresh_button.clicked.connect(self.refresh_clicked.emit)
         
-        # 手动找卡：输入 单IP / 区间 / CIDR（如 192.168.1.10 或 192.168.1.1-192.168.1.50）
+        # 手动找卡：支持 单IP / 区间 / CIDR，以及逗号或空格分隔的多种组合
+        # （占位符放不下四种写法，完整范例放在 tooltip 与格式错误提示里）
         self.manual_targets_label = QLabel("手动找卡:")
         self.manual_targets_edit = QLineEdit()
-        self.manual_targets_edit.setPlaceholderText("IP / 区间 / CIDR，如 192.168.1.10")
+        self.manual_targets_edit.setPlaceholderText(
+            "如 192.168.80.6 ｜ 192.168.80.1-192.168.80.50 ｜ 192.168.80.0/24")
+        self.manual_targets_edit.setToolTip(format_target_spec_hint())
         self.manual_targets_edit.setMinimumWidth(200)
         self.manual_targets_edit.returnPressed.connect(self.on_manual_find_clicked)
         self.manual_find_button = QPushButton("手动找卡")
@@ -247,7 +251,10 @@ class ControlPanel(QWidget):
         """手动找卡按钮/回车事件：把输入的目标下发给上层。"""
         targets = self.manual_targets_edit.text().strip()
         if not targets:
-            self.update_refresh_status("请输入手动找卡目标（IP / 区间 / CIDR）", is_warning=True)
+            # 空输入时把三种写法直接摆出来（完整范例见输入框 tooltip）
+            self.update_refresh_status(
+                "请输入目标：单个 IP（192.168.80.6）/ IP 区间（192.168.80.1-192.168.80.50）"
+                " / CIDR（192.168.80.0/24），也可组合", is_warning=True)
             return
         self.manual_find_clicked.emit(targets)
         

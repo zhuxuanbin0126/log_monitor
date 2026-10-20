@@ -138,11 +138,45 @@ def test_parse_ip_spec_range_and_cidr():
     assert mf.parse_ip_spec("192.168.1.0/30") == ["192.168.1.1", "192.168.1.2"]
 
 
+def test_parse_ip_spec_accepts_mixed_combo_with_spaces():
+    """提示里给的组合写法（逗号/空格混用）必须真的能解析。"""
+    spec = "192.168.1.9 192.168.1.10-192.168.1.11, 192.168.1.0/30"
+    assert mf.parse_ip_spec(spec) == [
+        "192.168.1.9", "192.168.1.10", "192.168.1.11", "192.168.1.1", "192.168.1.2"]
+
+    # 换行/制表符分隔同样可用（从表格里复制粘贴常见）
+    assert mf.parse_ip_spec("10.0.0.1\n10.0.0.2\t10.0.0.3") == [
+        "10.0.0.1", "10.0.0.2", "10.0.0.3"]
+
+
+def test_target_spec_hint_lists_three_formats_and_combo():
+    hint = mf.format_target_spec_hint()
+    for sample in ("192.168.80.6", "192.168.80.1-192.168.80.50", "192.168.80.0/24"):
+        assert sample in hint
+    assert "多种组合" in hint and "192.168.81.0/24" in hint
+    assert str(mf.PROBE_MAX_TARGETS) in hint
+
+
 def test_parse_ip_spec_rejects_invalid():
     with pytest.raises(ValueError):
         mf.parse_ip_spec("not-an-ip")
     with pytest.raises(ValueError):
         mf.parse_ip_spec("192.168.1.9-192.168.1.1")  # 起点大于终点
+
+
+def test_parse_ip_spec_reports_specific_reason():
+    """错误提示要能直接给用户看（中文、指明是哪一段写法不对）。"""
+    with pytest.raises(ValueError) as reversed_range:
+        mf.parse_ip_spec("192.168.1.9-192.168.1.1")
+    assert "区间起点大于终点" in str(reversed_range.value)
+
+    with pytest.raises(ValueError) as bad_token:
+        mf.parse_ip_spec("192.168.80.999")
+    assert "无法识别的目标" in str(bad_token.value)
+
+    with pytest.raises(ValueError) as too_many:
+        mf.parse_ip_spec("192.168.0.0/16", max_targets=100)
+    assert "超出上限" in str(too_many.value)
 
 
 def test_parse_ip_spec_enforces_target_limit():

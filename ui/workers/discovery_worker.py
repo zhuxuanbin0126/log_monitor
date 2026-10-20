@@ -17,6 +17,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 from config import UDP_SCAN_TIMEOUT, supported_dev_types
 from service.discovery import scan_devices, scan_targets
+from service.discovery.manual_finder import format_target_spec_hint
 from service.logging_service import get_logger
 
 logger = get_logger(__name__)
@@ -76,8 +77,8 @@ class DiscoveryThread(QThread):
             self.progress_signal.emit(f"发现 {len(lines)} 台设备")
             self.raw_list_signal.emit(lines)
         except ValueError as exc:
-            # 手动找卡的目标 IP 规范非法：给出明确文案，不算致命错误
-            error_msg = f"手动找卡目标格式错误: {exc}"
+            # 手动找卡的目标 IP 规范非法：给出明确文案 + 完整填写范例，不算致命错误
+            error_msg = f"手动找卡目标格式错误: {exc}\n{format_target_spec_hint()}"
             self.error_signal.emit(error_msg)
             logger.warning("手动找卡目标格式错误: %s", exc)
         except Exception as exc:  # pylint: disable=broad-except

@@ -1142,7 +1142,23 @@ class MainWindow(BaseWindow):
             self.control_panel.refresh_button.setEnabled(True)
 
     def manual_find_device_list(self, targets):
-        """手动找卡 - 按输入的 IP/区间/CIDR 定向扫描（广播兜底），异步执行。"""
+        """手动找卡 - 按输入的 IP/区间/CIDR 定向扫描（广播兜底），异步执行。
+
+        目标格式在**启动扫描前**先校验：格式不对就直接把四种写法回显到日志面板，
+        不必等扫描线程起来再失败（用户可立刻改）。
+        """
+        targets = (targets or "").strip()
+        if not targets:
+            self.log("请输入手动找卡目标", is_warning=True)
+            return
+        from service.discovery.manual_finder import parse_ip_spec, format_target_spec_hint
+        try:
+            parse_ip_spec(targets)
+        except ValueError as exc:
+            self.log(f"手动找卡目标格式错误：{exc}\n{format_target_spec_hint()}", is_error=True)
+            self.control_panel.update_refresh_status(
+                f"目标格式错误：{exc}（填写范例见日志面板）", is_error=True)
+            return
         try:
             self.control_panel.refresh_button.setDisabled(True)
             # 暂停后台心跳：避免与本次扫描的探测包相互干扰
@@ -1310,9 +1326,11 @@ class MainWindow(BaseWindow):
         self.control_panel.update_refresh_status(f"当前设备数: {count}")
 
     def on_refresh_failed(self, error_msg):
-        """设备查找失败回调。"""
+        """设备查找失败回调（格式错误时日志面板会带完整填写范例）。"""
         self.log(error_msg, is_error=True)
-        self.control_panel.update_refresh_status(error_msg, is_error=True)
+        # 状态标签只有一行：取首行，避免长文本被截断
+        first_line = (error_msg or "设备查找失败").splitlines()[0]
+        self.control_panel.update_refresh_status(first_line, is_error=True)
         self.control_panel.refresh_button.setEnabled(True)
 
     def on_refresh_finished(self):

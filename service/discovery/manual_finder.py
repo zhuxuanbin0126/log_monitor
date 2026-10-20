@@ -35,6 +35,28 @@ from .udp_finder import (
 logger = get_logger(__name__)
 
 
+class TargetSpecError(ValueError):
+    """手动找卡的目标写法不合法（提示语已是中文，可直接展示给用户）。"""
+
+
+TARGET_SPEC_EXAMPLES = (
+    ("单个 IP", "192.168.80.6"),
+    ("IP 区间", "192.168.80.1-192.168.80.50"),
+    ("CIDR 网段", "192.168.80.0/24"),
+    ("多种组合", "192.168.80.6, 192.168.80.10-192.168.80.20, 192.168.81.0/24"),
+)
+"""手动找卡支持的四种写法（三种基础格式 + 组合），供占位提示与错误提示复用。"""
+
+
+def format_target_spec_hint() -> str:
+    """多行「填写方式」提示：格式错误时原样回显，避免用户再去翻文档。"""
+    lines = ["支持的填写方式（多个目标用逗号或空格分隔）："]
+    for index, (label, sample) in enumerate(TARGET_SPEC_EXAMPLES, start=1):
+        lines.append(f"  {index}. {label}：{sample}")
+    lines.append(f"一次最多 {PROBE_MAX_TARGETS} 个 IP（区间/CIDR 过大会被拒绝，请缩小范围）")
+    return "\n".join(lines)
+
+
 def parse_ip_spec(spec, max_targets: Optional[int] = PROBE_MAX_TARGETS) -> List[str]:
     """把「目标规范」解析为 IPv4 字符串列表（去重、保序）。
 
@@ -55,12 +77,17 @@ def parse_ip_spec(spec, max_targets: Optional[int] = PROBE_MAX_TARGETS) -> List[
     Raises:
         ValueError: 规范非法或超出上限。
     """
-    tokens: List[str] = []
+    raw_items: List[str] = []
     if isinstance(spec, (list, tuple, set)):
-        for item in spec:
-            tokens.extend(str(item).replace(";", ",").split(","))
+        raw_items = [str(item) for item in spec]
     else:
-        tokens.extend(str(spec).replace(";", ",").split(","))
+        raw_items = [str(spec)]
+
+    # 逗号、分号、空格、换行、制表符都当作分隔符（与提示里的组合写法一致）
+    tokens: List[str] = []
+    for item in raw_items:
+        for chunk in item.replace(";", ",").replace("\n", ",").replace("\t", ",").split(","):
+            tokens.extend(chunk.split())
 
     ips: List[str] = []
     seen = set()
@@ -74,12 +101,12 @@ def parse_ip_spec(spec, max_targets: Optional[int] = PROBE_MAX_TARGETS) -> List[
                 start = ipaddress.ip_address(start_s.strip())
                 end = ipaddress.ip_address(end_s.strip())
                 if start.version != 4 or end.version != 4:
-                    raise ValueError(f"仅支持 IPv4: {tok}")
+                    raise TargetSpecError(f"仅支持 IPv4: {tok}")
                 if int(end) < int(start):
-                    raise ValueError(f"区间起点大于终点: {tok}")
+                    raise TargetSpecError(f"区间起点大于终点: {tok}")
                 count = int(end) - int(start) + 1
                 if max_targets is not None and len(ips) + count > max_targets:
-                    raise ValueError(
+                    raise TargetSpecError(
                         f"目标 IP 数量 {len(ips) + count} 超出上限 {max_targets}（请缩小区间）")
                 for i in range(count):
                     ip = str(ipaddress.ip_address(int(start) + i))
@@ -89,10 +116,10 @@ def parse_ip_spec(spec, max_targets: Optional[int] = PROBE_MAX_TARGETS) -> List[
             elif "/" in tok:
                 net = ipaddress.ip_network(tok, strict=False)
                 if net.version != 4:
-                    raise ValueError(f"仅支持 IPv4: {tok}")
+                    raise TargetSpecError(f"仅支持 IPv4: {tok}")
                 hosts = list(net.hosts())
                 if max_targets is not None and len(ips) + len(hosts) > max_targets:
-                    raise ValueError(
+                    raise TargetSpecError(
                         f"目标 IP 数量 {len(ips) + len(hosts)} 超出上限 {max_targets}（请缩小区间）")
                 for host in hosts:
                     ip = str(host)
@@ -104,11 +131,11 @@ def parse_ip_spec(spec, max_targets: Optional[int] = PROBE_MAX_TARGETS) -> List[
                 if ip not in seen:
                     seen.add(ip)
                     ips.append(ip)
+        except TargetSpecError:
+            raise                     # 已是中文提示，直接透出
         except ValueError as exc:
-            # 容量超限（"超出上限"）直接透传；其余视为规范非法
-            if "超出上限" in str(exc):
-                raise
-            raise ValueError(f"非法目标 IP 规范 '{tok}': {exc}") from exc
+            raise TargetSpecError(
+                f"无法识别的目标 '{tok}'（应为 IP / a-b 区间 / x/y 网段）") from exc
     return ips
 
 
