@@ -23,6 +23,7 @@ from .device_utils import (
 )
 from .adb_service import ADBService
 from .adb_device_manager import ADBDeviceManager
+from . import ssh_service
 from .logging_service import get_logger
 from .password_service import get_password as compute_password
 from .protocol.command_query import (
@@ -503,19 +504,32 @@ class ToolService:
     def pscp_push_file(ip, password, local_file, remote_file):
         """
         使用pscp推送文件到Linux设备，返回stdout/stderr/returncode
+
+        首次连某台设备时 pscp 也会因「主机密钥未缓存」失败 —— **就地**接受一次
+        （与 ssh_service 同源），再补发一次，不做多轮重试。
         """
         pscp_exe = ToolService.get_tool_path('pscp.exe')
-        cmd = f"{pscp_exe} -pw \"{password}\" \"{local_file}\" root@{ip}:{remote_file}"
-        return ToolService.run_command(cmd)
+        cmd = f"{pscp_exe} -batch -pw \"{password}\" \"{local_file}\" root@{ip}:{remote_file}"
+        stdout, stderr, returncode = ToolService.run_command(cmd)
+        if returncode != 0 and ssh_service.is_host_key_error(stderr):
+            ssh_service.accept_host_key(ip, password)
+            return ToolService.run_command(cmd)
+        return stdout, stderr, returncode
 
     @staticmethod
     def pscp_pull_file(ip, password, remote_file, local_file):
         """
         使用pscp从Linux设备拉取文件，返回stdout/stderr/returncode
+
+        （主机密钥未缓存时同 :meth:`pscp_push_file`：就地接受一次再补发）
         """
         pscp_exe = ToolService.get_tool_path('pscp.exe')
-        cmd = f"{pscp_exe} -pw \"{password}\" root@{ip}:{remote_file} \"{local_file}\""
-        return ToolService.run_command(cmd)
+        cmd = f"{pscp_exe} -batch -pw \"{password}\" root@{ip}:{remote_file} \"{local_file}\""
+        stdout, stderr, returncode = ToolService.run_command(cmd)
+        if returncode != 0 and ssh_service.is_host_key_error(stderr):
+            ssh_service.accept_host_key(ip, password)
+            return ToolService.run_command(cmd)
+        return stdout, stderr, returncode
 
     @staticmethod
     def adb_screencap(ip, remote_file):
@@ -576,40 +590,13 @@ class ToolService:
     @staticmethod
     def ssh_check_file_exists(ip, password, remote_file, max_retries=3):
         """
-        使用SSH检查远程文件是否存在，带重试机制
-        max_retries=1时为快速检查模式，不进行重试等待
-        
-        参数:
-            ip: 设备IP地址
-            password: 设备密码
-            remote_file: 远程文件路径
-            max_retries: 最大重试次数
-            
-        返回:
-            bool: 文件存在返回True，否则返回False
+        使用SSH检查远程文件是否存在。
+
+        ``max_retries`` 保留了签名兼容性，但**不再做多轮重试**：一次 ``test -f``
+        就是确定性答案，重试只会把失败路径拖长（一次 1~3s 变 3~9s）。
+        通道选择由 :func:`service.ssh_service.execute` 决定（paramiko → plink）。
         """
-        is_fast_check = max_retries == 1
-        
-        for attempt in range(max_retries):
-            try:
-
-                plink_exe = ToolService.get_tool_path('plink.exe')
-                cmd = f'echo y | {plink_exe} -batch -l root -pw "{password}" "{ip}" "ls -l {remote_file}"'
-                stdout, stderr, returncode = ToolService.run_command(cmd, timeout=5 if is_fast_check else 10)
-                
-
-                
-                if returncode == 0 and not stderr and "No such" not in stdout:
-                    return True
-                
-                # 如果失败，等待后重试（仅非快速检查模式）
-                if attempt < max_retries - 1 and not is_fast_check:
-                    time.sleep(1)
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    time.sleep(1)
-        
-        return False
+        return ssh_service.file_exists(ip, password, remote_file)
     
     @staticmethod
     def check_file_exists(device_id, ip, password, remote_file, max_retries=3):
@@ -698,17 +685,10 @@ class ToolService:
                     if returncode == 0 or not stderr or not ("refused" in stderr.lower() or "unable" in stderr.lower()):
                         return stdout, stderr, returncode
                 else:
-                    # Linux 设备使用 SSH
-                    plink_exe = ToolService.get_tool_path('plink.exe')
-                    if working_dir:
-                        full_cmd = f'cd {working_dir} && {cmd}'
-                    else:
-                        full_cmd = cmd
-                    ssh_cmd = f'echo y | {plink_exe} -batch -l root -pw "{password}" "{ip}" "{full_cmd}"'
-                    stdout, stderr, returncode = ToolService.run_command(ssh_cmd, timeout=30)
-                    
-                    if returncode == 0 or not stderr or not ("refused" in stderr.lower() or "unable" in stderr.lower()):
-                        return stdout, stderr, returncode
+                    # Linux 设备：SSH 是**唯一**通道，一次直连（paramiko 复用连接，
+                    # 失败由 ssh_service 内部单次回退 plink），不做多轮重试与 sleep
+                    full_cmd = f'cd {working_dir} && {cmd}' if working_dir else cmd
+                    return ssh_service.execute(ip, password, full_cmd)
                 
                 # 如果失败且还有重试次数，等待后重试
                 if attempt < max_retries - 1:

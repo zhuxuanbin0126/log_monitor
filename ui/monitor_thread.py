@@ -3,7 +3,6 @@ from business.device_monitor_service import DeviceMonitorService
 from service.batch_dispatch import run_grouped
 from service.tool_service import ToolService
 from service.device_utils import is_android_device
-from service.protocol import get_device_status
 from config import QUERY_GROUP_SIZE, QUERY_MAX_WORKERS
 from service.logging_service import get_logger
 from data_models import MonitorConfig
@@ -101,9 +100,9 @@ class MonitorThread(QThread):
 
         try:
             password = ToolService.get_password(device_id)
-            # 协议可用时完全不需要 SSH 前置（协议优先取数 + 协议截图）
-            if not self._protocol_ready(device_id, ip):
-                ToolService.initialize_connection(ip, password)
+            # 协议可用时完全不需要 SSH 前置（协议优先取数 + 协议截图）；
+            # Linux 走 ssh_service：paramiko 自动接受主机密钥并复用连接，
+            # 不再先跑一次 plink echo y 去「预热」。
 
             # 判断是否首次获取
             is_first_time = self._is_first_time(device_id)
@@ -131,16 +130,6 @@ class MonitorThread(QThread):
                 self._report_status(device_id, ip, is_first_time)
         except Exception as e:
             self.error_signal.emit(f"处理设备 {device_id} ({ip}) 时出错: {str(e)}", device_id, ip)
-
-    @staticmethod
-    def _protocol_ready(device_id, ip):
-        """该设备当前是否可用协议通道（可用则无需 SSH 初始化）。"""
-        if not is_android_device(device_id):
-            return False
-        try:
-            return get_device_status(ip) is not None
-        except Exception:  # pylint: disable=broad-except
-            return False
 
     def _parse_device_info(self, device_info):
         """解析设备信息为 (device_id, ip)"""
@@ -196,7 +185,7 @@ class MonitorThread(QThread):
             if 'initial_time_diff' in device_data:
                 msg += f"- 与电脑当前的时间差: {device_data['initial_time_diff']}秒\n"
             if not is_android_device(device_id):
-                msg += "- 启动次数: 无法获取（Linux 设备无播放器概念）\n"
+                msg += "- 启动次数: 无法获取（Linux 设备无播放器）\n"
             elif 'initial_start_count' in device_data:
                 msg += f"- 播放器启动次数: {device_data['initial_start_count']}\n"
             self.update_signal.emit(msg)

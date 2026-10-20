@@ -1,10 +1,10 @@
 """设备命令传输层抽象：协议 exec / ADB / SSH 可替换实现。"""
 
-import os
 from abc import ABC, abstractmethod
 
+from service import ssh_service
 from service.adb_device_manager import ADBDeviceManager
-from service.device_utils import get_tool_path, is_android_device, run_command
+from service.device_utils import is_android_device
 from service.logging_service import get_logger
 from service.protocol.command_query import exec_command_triple
 
@@ -21,49 +21,15 @@ class IDeviceTransport(ABC):
 
 
 class SshTransport(IDeviceTransport):
-    """SSH 传输：优先 paramiko（密码不落命令行），否则回退 plink。"""
+    """SSH 传输（Linux 设备的唯一通道）：paramiko 复用连接 → plink 单次回退。
+
+    具体策略见 :mod:`service.ssh_service`：不再有「重试 3 次、每次等 1 秒」的老路，
+    也不再要求调用方先跑一次 plink ``echo y`` 去初始化主机密钥。
+    """
 
     def execute(self, ip: str, password: str, command_script: str,
                 base_dir: str = ".") -> tuple:
-        try:
-            import paramiko  # type: ignore
-        except ImportError:
-            return self._execute_with_plink(ip, password, command_script, base_dir)
-
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        try:
-            client.connect(
-                ip, username='root', password=password,
-                timeout=10, banner_timeout=10, auth_timeout=10,
-                look_for_keys=False, allow_agent=False,
-            )
-            _, stdout, stderr = client.exec_command(command_script, timeout=30)
-            out = stdout.read().decode('utf-8', errors='ignore').strip()
-            err = stderr.read().decode('utf-8', errors='ignore').strip()
-            rc = stdout.channel.recv_exit_status()
-            return out, err, rc
-        except Exception as e:
-            return "", str(e), -1
-        finally:
-            client.close()
-
-    @staticmethod
-    def _execute_with_plink(ip: str, password: str, command_script: str,
-                            base_dir: str) -> tuple:
-        os.makedirs(base_dir, exist_ok=True)
-        script_filename = f"{base_dir}/{ip}temp_script.txt"
-        with open(script_filename, 'w', encoding='utf-8') as f:
-            f.write(command_script)
-            f.write('\nexit\n')
-
-        try:
-            plink_exe = get_tool_path('plink.exe')
-            cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {script_filename}'
-            return run_command(cmd)
-        finally:
-            if os.path.exists(script_filename):
-                os.remove(script_filename)
+        return ssh_service.execute(ip, password, command_script, base_dir)
 
 
 class AndroidTransport(IDeviceTransport):

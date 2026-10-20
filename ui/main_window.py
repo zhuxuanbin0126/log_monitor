@@ -886,6 +886,11 @@ class MainWindow(BaseWindow):
             self.enable_adb_worker.wait()
         if self.clear_history_worker and self.clear_history_worker.isRunning():
             self.clear_history_worker.wait(5000)
+        try:
+            from service import ssh_service
+            ssh_service.close_all()
+        except Exception:  # pylint: disable=broad-except
+            pass
         event.accept()
     
     def refresh_device_list(self):
@@ -1042,12 +1047,12 @@ class MainWindow(BaseWindow):
             parts.append("上线 " + ", ".join(f"{dev}({ip})" for dev, ip in added))
         if removed:
             parts.append("下线 " + ", ".join(f"{dev}({ip})" for dev, ip in removed))
-        self.log("后台心跳检测到设备变化（增量更新）- " + "；".join(parts))
+        self.log("- " + "；".join(parts))
 
         for device_id, _ip in removed:
             if self.device_list_view.remove_device(device_id):
                 self.devices = [d for d in (self.devices or []) if d.get('id') != device_id]
-                logger.info("[后台心跳] 已移除下线设备行: %s", device_id)
+                logger.info("设备: %s 下线", device_id)
 
         if added:
             # 仅对新增设备补全信息（并行、逐台回报 → 插入/更新该行）

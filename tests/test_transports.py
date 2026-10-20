@@ -103,24 +103,17 @@ def test_ssh_transport_uses_paramiko_when_available(monkeypatch):
     assert (out, err, rc) == ('ok', '', 0)
 
 
-def test_ssh_transport_plink_fallback(monkeypatch, tmp_path):
-    calls = {}
+def test_ssh_transport_delegates_to_ssh_service(monkeypatch):
+    """SSH 通道统一由 ssh_service 承担（paramiko 复用 → plink 单次回退）。"""
+    seen = {}
 
-    def fake_run_command(cmd):
-        calls['cmd'] = cmd
-        script_path = cmd.split(' -m ')[-1]
-        calls['script_exists'] = __import__('os').path.exists(script_path)
-        calls['script'] = open(script_path, encoding='utf-8').read()
-        return 'plink-out', '', 0
+    def _fake_execute(ip, password, command_script, base_dir="."):
+        seen.update({'ip': ip, 'cmd': command_script, 'base_dir': base_dir})
+        return 'ok', '', 0
 
-    monkeypatch.setattr(transports, 'run_command', fake_run_command)
-    monkeypatch.setattr(transports, 'get_tool_path', lambda name: name)
-    monkeypatch.setitem(sys.modules, 'paramiko', None)
+    monkeypatch.setattr(transports.ssh_service, 'execute', _fake_execute)
 
-    out, err, rc = SshTransport._execute_with_plink(
-        '192.168.1.10', 'pwd', 'uptime', str(tmp_path)
-    )
-    assert (out, err, rc) == ('plink-out', '', 0)
-    assert 'uptime' in calls['script']
-    assert calls['script_exists'] is True
-    assert not (tmp_path / '192.168.1.10temp_script.txt').exists()
+    out, err, rc = SshTransport().execute('192.168.1.10', 'pwd', 'uptime', 'tmpdir')
+
+    assert (out, err, rc) == ('ok', '', 0)
+    assert seen == {'ip': '192.168.1.10', 'cmd': 'uptime', 'base_dir': 'tmpdir'}

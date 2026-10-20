@@ -250,9 +250,9 @@ class SerialQueryManager(QThread):
                 if adb_ok and prev_status != '开启':
                     adb_just_enabled = True
 
-            if not protocol_ready:
-                # 初始化 SSH 连接（作为 adb 不可用时的 fallback）
-                ToolService.initialize_connection(ip, password)
+            # 非协议设备不再「先跑一次 plink echo y 初始化」：
+            # Linux 走 ssh_service（paramiko 自动接受主机密钥、复用连接），
+            # 只有真的回退到 plink/pscp 且报「密钥未缓存」时才就地接受一次。
 
             self._set_state(self.STATE_QUERYING)
             logger.info("[串行管理器] %s 开始执行查询（类型=%s，通道=%s）",
