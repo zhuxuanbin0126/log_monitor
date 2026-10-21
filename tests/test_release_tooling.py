@@ -36,3 +36,12 @@ def test_changelog_contains_current_version():
 def test_readme_mentions_current_version():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert f"v{config.VERSION}" in readme
+
+
+def test_release_notes_document_exists():
+    """当前版本必须有发布说明文档（文件名随版本号变化）。"""
+    notes = ROOT / f"发布说明_V{config.VERSION}.md"
+    assert notes.is_file(), f"缺少发布说明文档：{notes.name}"
+    text = notes.read_text(encoding="utf-8")
+    assert config.VERSION in text
+    assert "已知限制" in text and "修复" in text

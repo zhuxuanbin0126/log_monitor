@@ -261,6 +261,7 @@ pyinstaller log_monitor.spec
 - `tools/`：设备端脚本（boot_counter.sh、ntpdate、init.*.rc 等）
 - `device_info.json`：设备型号配置
 - `README.md`、`用户手册.md`、`用户手册.pdf`、`CHANGELOG.md`
+- `发布说明_V<版本号>.md`：当前版本的发布说明（功能、性能、修复、升级须知）
 - `SHA256SUMS.txt`：逐文件 SHA256 校验清单
 - `log_monitor_vX.Y.Z.W.zip`：完整发布压缩包
 
