@@ -232,7 +232,7 @@ class ToolService:
                 stdout, stderr, _ = ToolService.initialize_connection(ip, password)
                 if not stderr:
                     plink_exe = ToolService.get_tool_path('plink.exe')
-                    getinfo_path_fixed = getinfo_path.replace('/', '\\')
+                    getinfo_path_fixed = os.path.normpath(getinfo_path)
                     cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {getinfo_path_fixed}'
                     stdout, stderr, returncode = ToolService.run_command(cmd, timeout=15)
                     if stdout and not stderr:

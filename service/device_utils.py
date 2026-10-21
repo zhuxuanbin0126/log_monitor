@@ -54,9 +54,13 @@ def tool_search_paths(tool_name):
 
 
 def get_tool_path(tool_name):
-    """获取工具的完整路径（Windows 反斜杠）：**外部 tools/bin 优先**，缺失才用内置副本。
+    """获取工具的完整路径（**当前平台原生分隔符**）：**外部 tools/bin 优先**，缺失才用内置副本。
 
     结果按工具名缓存，避免 adb 高频调用时反复 ``os.path.isfile``。
+
+    注意：分隔符必须用 :func:`os.path.normpath` 归一，**不能写死反斜杠**——
+    在 Linux/macOS 上把 ``/`` 替换成 ``\\`` 会得到 ``\\home\\...`` 这种不存在的路径，
+    导致工具「明明在却找不到」（GitHub Actions 的 ubuntu runner 上即由此失败）。
     """
     cached = _TOOL_PATH_CACHE.get(tool_name)
     if cached:
@@ -64,17 +68,18 @@ def get_tool_path(tool_name):
     candidates = tool_search_paths(tool_name)
     for path in candidates:
         if os.path.isfile(path):
-            resolved = path.replace('/', '\\')
+            resolved = os.path.normpath(path)
             _TOOL_PATH_CACHE[tool_name] = resolved
             return resolved
     # 都不存在：返回首选路径（调用方会拿到「文件不存在」这一确定性错误）
-    fallback = candidates[0].replace('/', '\\')
+    fallback = os.path.normpath(candidates[0])
     _TOOL_PATH_CACHE[tool_name] = fallback
     return fallback
 
 
-TOOLS_DIR = (EXTERNAL_TOOLS_DIR if os.path.isdir(EXTERNAL_TOOLS_DIR)
-             else (BUNDLED_TOOLS_DIR or EXTERNAL_TOOLS_DIR)).replace('/', '\\')
+TOOLS_DIR = os.path.normpath(
+    EXTERNAL_TOOLS_DIR if os.path.isdir(EXTERNAL_TOOLS_DIR)
+    else (BUNDLED_TOOLS_DIR or EXTERNAL_TOOLS_DIR))
 ADB_PATH = get_tool_path('adb.exe')
 
 

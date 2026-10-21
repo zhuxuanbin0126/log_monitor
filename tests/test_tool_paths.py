@@ -71,6 +71,24 @@ def test_tools_status_reports_missing(monkeypatch, tmp_path):
     assert status["resolved"]["adb.exe"].endswith("adb.exe")
 
 
+def test_tool_path_uses_native_separators(monkeypatch, tmp_path):
+    """路径分隔符必须是**当前平台原生**形式（回归：曾写死反斜杠）。
+
+    在 Linux/macOS 上把 ``/`` 替换成 ``\\`` 会得到 ``\\home\\...`` 这种不存在的路径，
+    工具「明明在却找不到」；GitHub Actions 的 ubuntu runner 上即由此导致 4 个用例失败。
+    """
+    external = tmp_path / "tools" / "bin"
+    _touch(external / "adb.exe")
+    _reset(monkeypatch, external, "")
+
+    path = du.get_tool_path("adb.exe")
+
+    assert path == os.path.normpath(str(external / "adb.exe"))
+    assert os.path.isfile(path)                     # 必须能定位到真实文件
+    assert os.path.basename(path) == "adb.exe"
+    assert os.path.dirname(path) == os.path.normpath(str(external))
+
+
 def test_tools_search_order_external_first(monkeypatch, tmp_path):
     _reset(monkeypatch, tmp_path / "ext", tmp_path / "mei")
     paths = du.tool_search_paths("adb.exe")
