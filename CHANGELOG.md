@@ -2,6 +2,22 @@
 
 本项目采用四段版本号：`主.次.修订.构建`，与 `config.VERSION`、`version_info.txt`、Git tag 保持一致。
 
+## v1.0.6.1 (2026-10-20)
+
+### 修复
+
+- 工具路径分隔符写死反斜杠：Linux/macOS 上路径被改成 `\home\...` 这种不存在的路径，
+  导致「工具明明在却找不到」；GitHub Actions 的 ubuntu runner 上 4 个用例因此失败。
+  `service/device_utils.py`（`get_tool_path` / `TOOLS_DIR`）与 `service/tool_service.py`
+  （getdeviceinfo 脚本路径）统一改用 `os.path.normpath()`，跟随平台原生分隔符
+
+### 新增
+
+- `发布说明_V1.0.6.1.md`：版本发布说明（新增能力、性能实测、修复清单、行为变化、已知限制、校验指纹），
+  随发布包一起分发
+- 回归测试：工具路径必须能定位到真实文件且为当前平台原生分隔符
+- 回归测试：当前版本必须存在对应发布说明文档
+
 ## v1.0.6.0 (2026-10-20)
 
 ### 新增
