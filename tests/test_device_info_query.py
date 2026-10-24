@@ -268,15 +268,42 @@ def test_query_device_info_no_extra_get_when_mac_present(monkeypatch):
 
 # ---------------------------------------------------------------- ToolService 接线
 
-def test_build_device_info_linux_only_password():
+def test_build_device_info_linux_only_password(monkeypatch):
+    """Linux 机型：只取密码 + 版本（主版本来自 SSH 版本文件，OTA 恒为 N/A）。"""
+    monkeypatch.setattr(ts, 'query_linux_version', lambda _ip, _pw: '7.11.34.0')
     info = ts.ToolService._build_device_info('D16-00-0001', '192.168.1.9', 'pwd')
     assert info['system_type'] == 'Linux'
     assert info['adb_status'] == '不支持'
     assert info['adb_usb_status'] == '不支持'
     assert info['mac_address'] == NA
     assert info['device_name'] == NA
-    assert info['ota_version'] == NA
+    assert info['ota_version'] == NA          # Linux 无 OTA 版本
+    assert info['main_version'] == '7.11.34.0'
+
+
+def test_build_device_info_linux_version_unreachable(monkeypatch):
+    """Linux 机型取不到版本时退回 N/A，不抛异常。"""
+    monkeypatch.setattr(ts, 'query_linux_version', lambda _ip, _pw: NA)
+    info = ts.ToolService._build_device_info('D16-00-0001', '192.168.1.9', 'pwd')
     assert info['main_version'] == NA
+    assert info['ota_version'] == NA
+
+
+def test_get_version_info_linux_skips_ota_query(monkeypatch):
+    """Linux 分支不再跑 Android 专用的 getprop/dumpsys，只读版本文件。"""
+    calls = []
+    monkeypatch.setattr(ts, 'query_linux_version',
+                        lambda ip, pw: calls.append((ip, pw)) or '7.10.62.3')
+    monkeypatch.setattr(
+        ts.ToolService, 'run_command',
+        staticmethod(lambda *a, **k: pytest.fail('Linux 不应走 adb/命令通道')))
+
+    ota_version, main_version = ts.ToolService.get_version_info(
+        'C16L-D24-0F308', '192.168.81.127', 'pwd')
+
+    assert ota_version == NA                 # 无 OTA 版本 → 固定 N/A
+    assert main_version == '7.10.62.3'
+    assert calls == [('192.168.81.127', 'pwd')]
 
 
 def test_build_device_info_android_prefers_protocol(monkeypatch):

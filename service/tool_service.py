@@ -30,6 +30,7 @@ from .protocol.command_query import (
     exec_command_triple, exec_if_supported,
 )
 from .protocol.device_info_query import query_device_info
+from .linux_version import query_version as query_linux_version
 
 logger = get_logger(__name__)
              
@@ -58,8 +59,9 @@ class ToolService:
           ``DeviceInfo`` / ``VersionInfo`` / ``NetworkInfo`` / ``Development``
           —— 一个往返拿全 MAC、设备名、OTA/主版本、ADB 开启情况；
           协议不可用（不支持/不可达）时才回落原有的 adb/SSH 取数流程。
-        - **Linux**：按约定**只取设备密码**，不再走 SSH ``getdeviceinfo.sh``
-          （既无必要又易失败）。
+        - **Linux**：**只取设备密码**（不再走 SSH ``getdeviceinfo.sh``，既无必要又易失败），
+          但**版本仍要取**：主版本读设备端 ``/root/Box/version/version``；
+          **该类型无 OTA 版本**，OTA 列固定 ``N/A``。
 
         Args:
             enable_adb_fallback: 回落 adb/SSH 时是否顺带尝试开启网络 ADB。
@@ -76,11 +78,16 @@ class ToolService:
             'adb_usb_status': "未知",
         }
 
-        # Linux：只取密码，不查这些（Android 专属）信息
+        # Linux：只取密码 + 版本（主版本走 SSH 读版本文件；OTA 无 → N/A）
         if not ToolService.is_android_device(device_id):
             info['system_type'] = 'Linux'
             info['adb_status'] = '不支持'
             info['adb_usb_status'] = '不支持'
+            ota_version, main_version = ToolService.get_version_info(device_id, ip, password)
+            info['ota_version'] = ota_version
+            info['main_version'] = main_version
+            logger.info("[ToolService] %s Linux 机型取数: 主版本=%s OTA=%s",
+                        device_id, main_version, ota_version)
             return info
 
         # Android：协议优先（一次 Get）
@@ -254,26 +261,26 @@ class ToolService:
         """
         获取设备的版本信息（OTA版本、主版本）
         根据设备类型自动选择ADB或SSH方式
-        
+
         返回:
             tuple: (ota_version, main_version)
         """
         ota_version = "N/A"
         main_version = "N/A"
-        
+
         try:
             if ToolService.is_android_device(device_id):
                 # Android设备使用ADB方式
                 ToolService.run_command(f"{ADB_PATH} connect {ip}:5555")
                 time.sleep(0.5)
                 serial = ToolService.adb_get_device_serial(ip)
-                
+
                 # 获取OTA版本
                 cmd = f"{ADB_PATH} -s {serial} shell getprop ro.build.version"
                 stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
                 if stdout and not stderr:
                     ota_version = stdout.strip()
-                
+
                 # 获取主版本
                 cmd = f"{ADB_PATH} -s {serial} shell dumpsys package cn.huidu.lcd.player"
                 stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
@@ -285,32 +292,17 @@ class ToolService:
                             if len(ver_parts) > 1:
                                 main_version = ver_parts[1].strip()
                                 break
-                
+
                 ToolService.run_command(f"{ADB_PATH} disconnect {ip}:5555")
             else:
-                # Linux设备使用SSH方式
-                plink_exe = ToolService.get_tool_path('plink.exe')
-                
-                # 获取OTA版本
-                ssh_cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" "getprop ro.build.version"'
-                stdout, stderr, returncode = ToolService.run_command(ssh_cmd, timeout=10)
-                if stdout and not stderr:
-                    ota_version = stdout.strip()
-                
-                # 获取主版本
-                ssh_cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" "dumpsys package cn.huidu.lcd.player | grep versionName"'
-                stdout, stderr, returncode = ToolService.run_command(ssh_cmd, timeout=10)
-                if stdout and not stderr:
-                    lines = stdout.strip().split('\n')
-                    for line in lines:
-                        if 'versionName' in line:
-                            ver_parts = line.split('=', 1)
-                            if len(ver_parts) > 1:
-                                main_version = ver_parts[1].strip()
-                                break
+                # Linux 机型（C08L/C16L/D16/D36/Q910）：
+                #  · **无 OTA 版本**（设备端不存在 OTA 版本文件）→ 固定 N/A，跳过查询；
+                #  · 主版本取设备端发行版本文件 /root/Box/version/version
+                #    （旧实现在此跑 Android 专用的 getprop/dumpsys，Linux 上必然取不到值）。
+                main_version = query_linux_version(ip, password)
         except Exception as e:
             logger.warning("获取版本信息时出错: %s", e)
-        
+
         return ota_version, main_version
 
     @staticmethod
