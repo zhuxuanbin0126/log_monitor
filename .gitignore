@@ -17,6 +17,7 @@ output/
 output_*/
 *.xlsx
 *.zip
+upx/
 
 # ============ 运行数据 ============
 switch_log/
