@@ -2,6 +2,26 @@
 
 本项目采用四段版本号：`主.次.修订.构建`，与 `config.VERSION`、`version_info.txt`、Git tag 保持一致。
 
+## v1.0.6.2 (2026-10-24)
+
+### 修复
+
+- Linux 机型（C08L / C16L / D16 / D36 / Q910）设备列表「主版本」恒为 N/A：
+  `get_version_info` 的 Linux 分支原先执行的是 **Android 专用**命令
+  （`getprop ro.build.version` / `dumpsys package cn.huidu.lcd.player`），
+  在 Linux 设备上必然取不到值。改为经 SSH 读设备端发行版本文件
+  `/root/Box/version/version`（真机实测 C16L 取到 `7.11.34.0` / `7.10.62.3`）。
+  新增 `service/linux_version.py`（取数 + 纯函数解析，超时 10s 不拖慢刷新）。
+- Linux 机型的 OTA 版本查询：已确认该类型设备**不存在 OTA 版本**，
+  跳过查询并固定返回 `N/A`，不再白跑一次 SSH。
+
+### 变更
+
+- 工程垃圾清理：移除入库的 `upx/` 打包工具链（构建工具不入库，`.gitignore` 增加 `upx/`），
+  本地清理 `__pycache__`、`.pytest_cache`、`.pytest_tmp`、`build/`、`temp_work/`、
+  运行数据与截图/日志等构建产物（均为已被忽略的本地文件，不入库）
+- 新增单测 `tests/test_linux_version.py`（版本文件解析、SSH 取数、超时上限、N/A 口径）
+
 ## v1.0.6.1 (2026-10-20)
 
 ### 修复
@@ -14,7 +34,7 @@
 ### 新增
 
 - `发布说明_V1.0.6.1.md`：版本发布说明（新增能力、性能实测、修复清单、行为变化、已知限制、校验指纹），
-  随发布包一起分发
+  随发布包一起分发（该文档自 v1.0.6.2 起更名为 `发布说明_V1.0.6.2.md`）
 - 回归测试：工具路径必须能定位到真实文件且为当前平台原生分隔符
 - 回归测试：当前版本必须存在对应发布说明文档
 

@@ -290,7 +290,13 @@ pyinstaller log_monitor.spec
 
 ## 📝 更新日志
 
-### v1.0.6.1 (当前版本)
+### v1.0.6.2 (当前版本)
+- ✅ 修复 Linux 机型（C08L / C16L / D16 / D36 / Q910）「主版本」恒为 N/A：改由 SSH 读设备端 `/root/Box/version/version`（真机实测 C16L 取到 7.11.34.0 / 7.10.62.3）
+- ✅ Linux 机型跳过 OTA 版本查询（该类型无 OTA 版本，固定显示 N/A），不再白跑一次 SSH
+- ✅ 新增 `service/linux_version.py` 与单测 `tests/test_linux_version.py`
+- ✅ 工程垃圾清理：`upx/` 打包工具链不再入库，`.gitignore` 增补 `upx/`；本地清理各类缓存与构建产物
+
+### v1.0.6.1
 - ✅ 修复工具路径分隔符写死反斜杠的问题（Linux/macOS 上路径失效，CI ubuntu runner 4 个用例失败）
 - ✅ 新增 1.0.6.1 发布说明文档，随发布包分发
 
