@@ -290,7 +290,12 @@ pyinstaller log_monitor.spec
 
 ## 📝 更新日志
 
-### v1.0.6.2 (当前版本)
+### v1.0.6.3 (当前版本)
+- ✅ 修复 Android 设备「开关机次数」恒为 0：`/data` 下计数器文件为 root `0600`，`adb shell` 无读权限 → adb 命令公共出口遇 `Permission denied` 自动 `adb root` 后重跑（真机 A5L-A00-A1102 由 0 修正为 1）
+- ✅ 计数口径修正：「文件不存在」= 合法 0，「文件存在但读不到」= 判失败，不再把「没读到」显示成 0
+- ✅ 新增 4 个回归用例覆盖上述两条
+
+### v1.0.6.2
 - ✅ 修复 Linux 机型（C08L / C16L / D16 / D36 / Q910）「主版本」恒为 N/A：改由 SSH 读设备端 `/root/Box/version/version`（真机实测 C16L 取到 7.11.34.0 / 7.10.62.3）
 - ✅ Linux 机型跳过 OTA 版本查询（该类型无 OTA 版本，固定显示 N/A），不再白跑一次 SSH
 - ✅ 新增 `service/linux_version.py` 与单测 `tests/test_linux_version.py`

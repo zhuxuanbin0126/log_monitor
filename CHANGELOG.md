@@ -2,6 +2,25 @@
 
 本项目采用四段版本号：`主.次.修订.构建`，与 `config.VERSION`、`version_info.txt`、Git tag 保持一致。
 
+## v1.0.6.3 (2026-10-29)
+
+### 修复
+
+- Android 设备「开关机次数」恒为 0（真机 A5L-A00-A1102 实测）：`/data` 下的
+  `swich_counter.csv` / `network_counter.csv` 由 root 创建且为 `0600`，而查询用的
+  `adb shell` 是 `uid=2000(shell)` → `wc -l` 报 `Permission denied`、输出为空，
+  最终被折算成 0。根因是**读数值的通道没有提权**（导出能成功是因为 `pull_file`
+  内部先 `adb root`）。改为在 `ADBDeviceManager.execute_adb_command`（所有 adb 命令的
+  公共出口）遇权限拒绝时自动 `adb root` + 重连 + 重跑一次；非权限类失败不触发提权。
+- 计数口径：「文件不存在」= 合法 0，「**文件存在但读不到**」= 失败。
+  `DeviceLogService.sum_switch_count` 的失败出口不再返回 `(0, 0, True)`，
+  异常出口同样报失败并带原因，避免把「没读到」显示成「0 次」。
+
+### 新增
+
+- 回归测试：权限拒绝自动提权 / 非权限失败不提权（`tests/test_adb_device_manager.py`）
+- 回归测试：文件缺失算合法 0 / 文件存在但读不到判失败（`tests/test_device_log_service.py`）
+
 ## v1.0.6.2 (2026-10-24)
 
 ### 修复
