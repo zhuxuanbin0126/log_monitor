@@ -39,6 +39,52 @@ def test_parse_counts_rejects_unparsable_output():
     assert DeviceLogService._parse_counts("sh: syntax error") is None  # pylint: disable=protected-access
 
 
+# ---------------------------------------------------------------- sum_switch_count 口径
+
+def test_sum_switch_reads_counts_via_one_round_trip(monkeypatch):
+    """一次往返即可拿到两个计数（真机 2 行 = 表头 + 1 条记录 → 1 次）。"""
+    text = (f"{COUNT_SPLIT_MARKER}\n2 /data/swich_counter.csv\n"
+            f"{COUNT_SPLIT_MARKER}\n2 /data/network_counter.csv\n")
+    monkeypatch.setattr(
+        dls.ToolService, "execute_query_command",
+        staticmethod(lambda *a, **k: (text, "", 0)))
+
+    assert DeviceLogService.sum_switch_count(
+        "192.168.1.9", "pwd", "A5L-00-0001", "/data") == (1, 1, True, None)
+
+
+def test_sum_switch_zero_is_success_when_files_missing(monkeypatch):
+    """文件不存在 → 0 次是合法值，不算失败。"""
+    monkeypatch.setattr(
+        dls.ToolService, "execute_query_command",
+        staticmethod(lambda *a, **k: ("", "", 0)))
+    monkeypatch.setattr(
+        dls.ToolService, "check_file_exists",
+        staticmethod(lambda *a, **k: False))
+
+    assert DeviceLogService.sum_switch_count(
+        "192.168.1.9", "pwd", "A5L-00-0001", "/data") == (0, 0, True, None)
+
+
+def test_sum_switch_reports_failure_when_file_unreadable(monkeypatch):
+    """文件存在但读不到（/data 下 0600 文件、shell 无权）→ 必须判失败，不能折成 0。"""
+    monkeypatch.setattr(dls.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        dls.ToolService, "execute_query_command",
+        staticmethod(lambda *a, **k: ("", "wc: /data/swich_counter.csv: Permission denied", 1)))
+    monkeypatch.setattr(
+        dls.ToolService, "check_file_exists",
+        staticmethod(lambda *a, **k: True))
+
+    switch_time, network_time, success, error = DeviceLogService.sum_switch_count(
+        "192.168.1.9", "pwd", "A5L-00-0001", "/data")
+
+    assert (switch_time, network_time) == (0, 0)
+    assert success is False
+    assert "读取失败" in error and "Permission denied" in error
+
+
+
 # ---------------------------------------------------------------- 清除开关机日志
 
 def test_clean_switch_log_uses_single_round_trip(monkeypatch):

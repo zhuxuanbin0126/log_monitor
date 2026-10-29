@@ -85,8 +85,11 @@ class DeviceLogService:
             logger.info("[开关机计数] %s 一次往返未取到，逐文件降级", device_id)
             switch_time = 0
             network_time = 0
+            last_err = ""
 
             switch_exists = ToolService.check_file_exists(device_id, ip, password, switch_counter_path, max_retries=2)
+            # 文件不存在 → 0 次是合法值；文件存在却读不到 → 必须判失败（不能折成 0）
+            switch_ok = not switch_exists
             if switch_exists:
                 for attempt in range(3):
                     try:
@@ -96,6 +99,7 @@ class DeviceLogService:
                             stdout = stdout.strip()
                             try:
                                 switch_time = max(0, int(stdout.split()[0]) - 1)
+                                switch_ok = True
                                 break
                             except (ValueError, IndexError):
                                 pass
@@ -106,9 +110,11 @@ class DeviceLogService:
                             if not stderr and returncode == 0 and stdout:
                                 try:
                                     switch_time = max(0, int(stdout.strip()) - 1)
+                                    switch_ok = True
                                     break
                                 except (ValueError, IndexError):
                                     pass
+                        last_err = (stderr or stdout or "").strip() or last_err
 
                         if attempt < 2:
                             time.sleep(0.5)
@@ -117,6 +123,7 @@ class DeviceLogService:
                             time.sleep(0.5)
 
             network_exists = ToolService.check_file_exists(device_id, ip, password, network_counter_path, max_retries=2)
+            network_ok = not network_exists
             if network_exists:
                 for attempt in range(3):
                     try:
@@ -126,6 +133,7 @@ class DeviceLogService:
                             stdout = stdout.strip()
                             try:
                                 network_time = max(0, int(stdout.split()[0]) - 1)
+                                network_ok = True
                                 break
                             except (ValueError, IndexError):
                                 pass
@@ -136,9 +144,11 @@ class DeviceLogService:
                             if not stderr and returncode == 0 and stdout:
                                 try:
                                     network_time = max(0, int(stdout.strip()) - 1)
+                                    network_ok = True
                                     break
                                 except (ValueError, IndexError):
                                     pass
+                        last_err = (stderr or stdout or "").strip() or last_err
 
                         if attempt < 2:
                             time.sleep(0.5)
@@ -146,9 +156,13 @@ class DeviceLogService:
                         if attempt < 2:
                             time.sleep(0.5)
 
-            return switch_time, network_time, True, None
-        except Exception:
-            return 0, 0, True, None
+            if switch_ok and network_ok:
+                return switch_time, network_time, True, None
+            logger.warning("[开关机计数] %s 文件存在但读不到: %s", device_id, last_err)
+            return 0, 0, False, (f"{device_id} 开关机次数读取失败"
+                                 f"（文件存在但无读权限或通道无输出：{last_err or '空输出'}）")
+        except Exception as exc:
+            return 0, 0, False, f"{device_id} 开关机次数读取异常: {exc}"
 
     @staticmethod
     def clean_switch_log(ip, password, device_id, path):

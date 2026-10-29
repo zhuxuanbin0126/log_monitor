@@ -265,11 +265,48 @@ class ADBDeviceManager:
         return cls.get_cached_status(device_id) == '开启'
 
     @classmethod
-    def execute_adb_command(cls, ip, serial, command_script, timeout=15):
-        """使用 adb -s [serial] shell 执行命令，返回 (stdout, stderr, returncode)"""
+    def _root_and_reconnect(cls, ip, serial):
+        """``adb root`` 后重连，返回新的可用 serial（失败返回空串）。
+
+        与 :meth:`ADBService.pull_file` 的提权流程一致：``adb root`` 会重启 adbd，
+        等其起来后重新 ``adb connect`` 才能继续下发命令。
+        """
         try:
-            full_cmd = f'{ADB_PATH} -s {serial} shell "{command_script}"'
-            stdout, stderr, rc = run_command(full_cmd, timeout=timeout)
+            run_command(f"{ADB_PATH} -s {serial} root", timeout=10)
+        except Exception as exc:  # pylint: disable=broad-except
+            _log("WARN", f"adb root 失败 {ip}: {exc}")
+            return ""
+        time.sleep(3)                      # adbd 重启
+        ADBService.connect(ip)
+        time.sleep(1)
+        new_serial = ADBService.get_online_serial(ip)
+        if new_serial:
+            cls._put_pooled_connection(ip, new_serial)
+        return new_serial or ""
+
+    @classmethod
+    def execute_adb_command(cls, ip, serial, command_script, timeout=15):
+        """使用 adb -s [serial] shell 执行命令，返回 (stdout, stderr, returncode)。
+
+        ``adb shell`` 默认以 ``uid=2000(shell)`` 运行，而 ``/data`` 下的计数文件由 root
+        创建且为 ``0600`` → 读取会被 ``Permission denied``（导出能成功是因为
+        ``pull_file`` 内部先 ``adb root``）。因此**遇权限拒绝自动提权一次并重跑**，
+        这是所有 adb 命令的公共出口，改这里即可覆盖计数/启动次数等全部读取。
+        """
+
+        def _run(ser):
+            return run_command(f'{ADB_PATH} -s {ser} shell "{command_script}"', timeout=timeout)
+
+        try:
+            stdout, stderr, rc = _run(serial)
+            if rc != 0 and "permission denied" in (stderr or "").lower():
+                new_serial = cls._root_and_reconnect(ip, serial)
+                if new_serial:
+                    _log("INFO", f"{ip} 命令被权限拒绝，已 adb root 后重试")
+                    stdout, stderr, rc = _run(new_serial)
+                    serial = new_serial
+                else:
+                    _log("WARN", f"{ip} 命令被权限拒绝，且 adb root 不可用")
             # 如果命令因连接断开失败，失效该 IP 缓存，下次重连
             if rc != 0 and stderr and (
                 "not found" in stderr.lower() or
