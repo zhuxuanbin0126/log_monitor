@@ -219,7 +219,7 @@ python -m pylint -E ui service business main.py
 
 ### 8.1 本项目许可
 
-本项目源码采用 **木兰宽松许可证，第 2 版（Mulan PSL v2）**，全文见仓库根目录 `LICENSE`。该许可仅覆盖本项目代码，不覆盖第三方组件。
+本项目为深圳市灰度科技股份有限公司内部资产，采用**公司内部使用许可（All Rights Reserved）**，全文见仓库根目录 `LICENSE`，仅授权公司内部人员按职务使用。该许可仅覆盖本项目代码，不覆盖第三方组件；第三方组件许可与声明见根目录 `THIRD-PARTY-NOTICES`。
 
 ### 8.2 第三方组件
 
@@ -234,7 +234,7 @@ python -m pylint -E ui service business main.py
 
 1. **LGPLv3 许可证全文**（以及 GPLv3 全文，LGPLv3 以其为基础）；
 2. Qt 与 PySide6 的**版权声明与许可说明**（来自 PySide6 发行包的 `LICENSES/` 目录）；
-3. 本项目 `LICENSE`（木兰 PSL v2）；
+3. 本项目 `LICENSE`（公司内部使用许可）与 `THIRD-PARTY-NOTICES`（第三方组件声明）；
 4. 第三方组件许可清单（上表内容即可作为初稿）。
 
 ### 8.4 LGPLv3 合规要点

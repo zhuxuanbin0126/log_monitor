@@ -386,9 +386,9 @@ pyinstaller log_monitor.spec
 
 ## 📄 许可证
 
-本项目采用**木兰宽松许可证，第2版（MulanPSL-2.0）**，可自由使用和修改。
+本项目为深圳市灰度科技股份有限公司内部资产，采用**公司内部使用许可（All Rights Reserved）**，仅授权公司内部人员按职务使用，不对外开源分发。
 
-许可证全文见仓库根目录 [LICENSE](LICENSE)，或参见 <http://license.coscl.org.cn/MulanPSL2>。
+许可证全文见仓库根目录 [LICENSE](LICENSE)；第三方开源组件许可与声明见 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES)。
 
 ---
 **注意**：请确保遵守公司网络安全规定，合理使用设备监控功能。

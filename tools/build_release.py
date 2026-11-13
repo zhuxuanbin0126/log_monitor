@@ -31,6 +31,7 @@ RUNTIME_ITEMS = [
     "README.md",
     "README_1.0.7.0.md",
     "LICENSE",
+    "THIRD-PARTY-NOTICES",
     "CHANGELOG.md",
     "用户手册.md",
     "用户手册.pdf",
