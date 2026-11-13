@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from service.adb_service import ADBService
 from service.device_utils import (
-    ADB_PATH, run_command, get_tool_path, is_android_device,
+    ADB_CMD, run_command, get_tool_path, is_android_device,
 )
 from service.logging_service import get_logger
 from service.protocol.set_query import enable_wireless_adb as protocol_enable_wireless_adb
@@ -222,7 +222,7 @@ class ADBDeviceManager:
         # 1. 优先使用缓存
         cached_serial = cls._get_pooled_connection(ip)
         if cached_serial:
-            stdout, stderr, rc = run_command(f"{ADB_PATH} -s {cached_serial} shell echo ok", timeout=3)
+            stdout, stderr, rc = run_command(f"{ADB_CMD} -s {cached_serial} shell echo ok", timeout=3)
             if rc == 0:
                 cls.set_cached_status(device_id, '开启')
                 return True, cached_serial
@@ -272,7 +272,7 @@ class ADBDeviceManager:
         等其起来后重新 ``adb connect`` 才能继续下发命令。
         """
         try:
-            run_command(f"{ADB_PATH} -s {serial} root", timeout=10)
+            run_command(f"{ADB_CMD} -s {serial} root", timeout=10)
         except Exception as exc:  # pylint: disable=broad-except
             _log("WARN", f"adb root 失败 {ip}: {exc}")
             return ""
@@ -295,7 +295,7 @@ class ADBDeviceManager:
         """
 
         def _run(ser):
-            return run_command(f'{ADB_PATH} -s {ser} shell "{command_script}"', timeout=timeout)
+            return run_command(f'{ADB_CMD} -s {ser} shell "{command_script}"', timeout=timeout)
 
         try:
             stdout, stderr, rc = _run(serial)

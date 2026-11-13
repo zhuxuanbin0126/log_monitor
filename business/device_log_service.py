@@ -239,13 +239,13 @@ class DeviceLogService:
             for filename in ["swich_counter.csv", "network_counter.csv"]:
                 cmd = f"rm -f {delete_path}/{filename}"
                 # 直接使用 adb -s {serial} shell 确保用 root 身份执行
-                from service.device_utils import ADB_PATH, run_command
-                full_cmd = f'{ADB_PATH} -s {serial} shell "{cmd}"'
+                from service.device_utils import ADB_CMD, run_command
+                full_cmd = f'{ADB_CMD} -s {serial} shell "{cmd}"'
                 stdout, stderr, rc = run_command(full_cmd, timeout=10)
                 logger.debug("[clean_switch] root rm %s: rc=%s stderr=%r", filename, rc, stderr)
 
                 # 验证删除结果
-                verify_cmd = f'{ADB_PATH} -s {serial} shell "ls -l {delete_path}/{filename}"'
+                verify_cmd = f'{ADB_CMD} -s {serial} shell "ls -l {delete_path}/{filename}"'
                 v_stdout, v_stderr, v_rc = run_command(verify_cmd, timeout=5)
                 if v_rc == 0 and "No such" not in v_stdout:
                     logger.warning("[clean_switch] %s 仍然存在! 权限: %s", filename, v_stdout.strip())

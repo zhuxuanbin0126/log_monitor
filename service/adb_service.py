@@ -9,7 +9,7 @@ import time
 from typing import Dict, Optional, Tuple
 
 from .device_utils import (
-    ADB_PATH, get_tool_path, run_command, calculate_md5, TOOLS_DIR,
+    ADB_CMD, get_tool_path, run_command, calculate_md5, TOOLS_DIR,
     DEVICE_OTG_CONFIG, is_android_device,
 )
 from .logging_service import get_logger
@@ -62,18 +62,18 @@ class ADBService:
     @staticmethod
     def root_device(serial):
         """执行 adb root 获取 root 权限，返回 (stdout, stderr, returncode)"""
-        cmd = f"{ADB_PATH} -s {serial} root"
+        cmd = f"{ADB_CMD} -s {serial} root"
         return run_command(cmd, timeout=10)
 
     @staticmethod
     def shell_command(ip, password, command_script=None):
         """通过adb shell执行命令 (仅用于Android设备)"""
-        run_command(f"{ADB_PATH} connect {ip}:5555")
+        run_command(f"{ADB_CMD} connect {ip}:5555")
         time.sleep(0.5)
         serial = ADBService.get_device_serial(ip)
-        cmd = f"{ADB_PATH} -s {serial} shell {command_script}"
+        cmd = f"{ADB_CMD} -s {serial} shell {command_script}"
         stdout, stderr, returncode = run_command(cmd)
-        run_command(f"{ADB_PATH} disconnect {ip}:5555")
+        run_command(f"{ADB_CMD} disconnect {ip}:5555")
         return stdout.strip(), stderr.strip(), returncode
 
     @staticmethod
@@ -99,7 +99,7 @@ class ADBService:
 
             serial = ADBService.get_device_serial(ip)
             logger.info("[push] 开始推送文件: %s -> %s", local_file, remote_file)
-            cmd = f"{ADB_PATH} -s {serial} push \"{local_file}\" \"{remote_file}\""
+            cmd = f"{ADB_CMD} -s {serial} push \"{local_file}\" \"{remote_file}\""
             stdout, stderr, returncode = run_command(cmd, timeout=60)
             logger.debug("[push] 推送结果: stdout=%s, stderr=%s, code=%s", stdout, stderr, returncode)
 
@@ -119,15 +119,15 @@ class ADBService:
                 return "", stderr, returncode
 
             serial = ADBService.get_device_serial(ip)
-            cmd = f"{ADB_PATH} -s {serial} root"
+            cmd = f"{ADB_CMD} -s {serial} root"
             run_command(cmd, timeout=10)
             time.sleep(2)
 
-            cmd = f"{ADB_PATH} connect {ip}:5555"
+            cmd = f"{ADB_CMD} connect {ip}:5555"
             run_command(cmd)
             time.sleep(2)
 
-            cmd = f"{ADB_PATH} -s {serial} pull \"{remote_file}\" \"{local_file}\""
+            cmd = f"{ADB_CMD} -s {serial} pull \"{remote_file}\" \"{local_file}\""
             stdout, stderr, returncode = run_command(cmd, timeout=60)
 
             ADBService.disconnect_device(ip)
@@ -139,7 +139,7 @@ class ADBService:
     def screencap(ip, remote_file):
         """使用adb执行屏幕截图命令"""
         serial = ADBService.get_device_serial(ip)
-        cmd = f"{ADB_PATH} -s {serial} shell screencap -p {remote_file}"
+        cmd = f"{ADB_CMD} -s {serial} shell screencap -p {remote_file}"
         return run_command(cmd)
 
     @staticmethod
@@ -158,12 +158,12 @@ class ADBService:
             time.sleep(0.3)
 
             # 步骤2: 确认当前无设备连接
-            cmd = f"{ADB_PATH} devices"
+            cmd = f"{ADB_CMD} devices"
             devices_output, _, _ = run_command(cmd, timeout=10)
             logger.debug("[ADB] devices 输出: %s", devices_output)
 
             # 步骤3: 连接目标设备
-            cmd = f"{ADB_PATH} connect {ip}:5555"
+            cmd = f"{ADB_CMD} connect {ip}:5555"
             stdout, stderr, returncode = run_command(cmd)
             time.sleep(2)
 
@@ -177,14 +177,14 @@ class ADBService:
             if connection_failed and device_id and password:
                 ADBService._fallback_enable_adb(ip, password, device_id)
                 time.sleep(3)
-                cmd = f"{ADB_PATH} connect {ip}:5555"
+                cmd = f"{ADB_CMD} connect {ip}:5555"
                 stdout, stderr, returncode = run_command(cmd)
                 time.sleep(2)
 
             # 步骤4-5: 仅在需要 remount 时执行 root + remount
             if need_remount:
                 serial = ADBService.get_device_serial(ip)
-                cmd = f"{ADB_PATH} -s {serial} root"
+                cmd = f"{ADB_CMD} -s {serial} root"
                 root_stdout, root_stderr, root_rc = run_command(cmd, timeout=10)
                 logger.debug("[ADB] root 结果: %s %s", root_stdout, root_stderr)
                 time.sleep(3)
@@ -256,7 +256,7 @@ class ADBService:
         """
         devices = {}
         try:
-            stdout, _, returncode = run_command(f"{ADB_PATH} devices", timeout=10)
+            stdout, _, returncode = run_command(f"{ADB_CMD} devices", timeout=10)
         except Exception:
             return devices
         if returncode != 0 or not stdout:
@@ -283,14 +283,14 @@ class ADBService:
     @staticmethod
     def connect(ip):
         """使用adb连接设备"""
-        cmd = f"{ADB_PATH} connect {ip}:5555"
+        cmd = f"{ADB_CMD} connect {ip}:5555"
         return run_command(cmd)
 
     @staticmethod
     def get_device_serial(ip):
         """从adb devices输出中获取设备序列号"""
         try:
-            cmd = f"{ADB_PATH} devices"
+            cmd = f"{ADB_CMD} devices"
             stdout, stderr, returncode = run_command(cmd, timeout=10)
             if returncode == 0 and stdout:
                 for line in stdout.strip().split('\n'):
@@ -308,7 +308,7 @@ class ADBService:
     @staticmethod
     def disconnect():
         """使用adb断开所有连接"""
-        cmd = f"{ADB_PATH} disconnect"
+        cmd = f"{ADB_CMD} disconnect"
         return run_command(cmd)
 
     @staticmethod
@@ -318,7 +318,7 @@ class ADBService:
         并行查询场景必须用本方法：``adb disconnect``（无参数）会断开**所有**连接，
         在多线程并行处理多台设备时会误伤别的设备。
         """
-        cmd = f"{ADB_PATH} disconnect {ip}:5555"
+        cmd = f"{ADB_CMD} disconnect {ip}:5555"
         return run_command(cmd)
 
     @staticmethod
@@ -327,7 +327,7 @@ class ADBService:
         ADBService.connect(ip)
         time.sleep(0.5)
         serial = ADBService.get_device_serial(ip)
-        cmd = f"{ADB_PATH} -s {serial} shell rm {remote_file}"
+        cmd = f"{ADB_CMD} -s {serial} shell rm {remote_file}"
         return run_command(cmd)
 
     @staticmethod
@@ -341,7 +341,7 @@ class ADBService:
                 return None
 
             serial = ADBService.get_device_serial(ip)
-            cmd = f"{ADB_PATH} -s {serial} shell md5sum {remote_file}"
+            cmd = f"{ADB_CMD} -s {serial} shell md5sum {remote_file}"
             stdout, stderr, returncode = run_command(cmd)
             if not stderr and stdout:
                 md5_value = stdout.strip().split()[0]
@@ -371,7 +371,7 @@ class ADBService:
             ADBService.connect(ip)
             time.sleep(0.3)
             serial = ADBService.get_device_serial(ip)
-            cmd = f"{ADB_PATH} -s {serial} shell mkdir -p {remote_dir}"
+            cmd = f"{ADB_CMD} -s {serial} shell mkdir -p {remote_dir}"
             stdout, stderr, returncode = run_command(cmd)
             return returncode == 0 or (stderr and "File exists" in stderr)
         except Exception:
@@ -439,7 +439,7 @@ class ADBService:
                 if remote_dir and remote_dir != "/":
                     ADBService.ensure_directory(ip, remote_dir)
 
-                cmd = f"{ADB_PATH} -s {serial} push \"{local_file}\" \"{remote_file}\""
+                cmd = f"{ADB_CMD} -s {serial} push \"{local_file}\" \"{remote_file}\""
                 stdout, stderr, returncode = run_command(cmd, timeout=60)
 
                 if (stderr and ("Read-only file system" in stderr or "couldn't create file" in stderr)) or \
@@ -483,24 +483,24 @@ class ADBService:
             ADBService.disconnect_device(ip)
             time.sleep(0.3)
 
-            cmd = f"{ADB_PATH} connect {ip}:5555"
+            cmd = f"{ADB_CMD} connect {ip}:5555"
             stdout, stderr, returncode = run_command(cmd)
             time.sleep(2)
 
             serial = ADBService.get_device_serial(ip)
-            cmd = f"{ADB_PATH} -s {serial} root"
+            cmd = f"{ADB_CMD} -s {serial} root"
             stdout, stderr, returncode = run_command(cmd, timeout=10)
             time.sleep(3)
 
-            cmd = f"{ADB_PATH} connect {ip}:5555"
+            cmd = f"{ADB_CMD} connect {ip}:5555"
             run_command(cmd)
             time.sleep(2)
 
-            cmd = f"{ADB_PATH} -s {serial} remount"
+            cmd = f"{ADB_CMD} -s {serial} remount"
             stdout, stderr, returncode = run_command(cmd, timeout=10)
 
             if returncode != 0 or stderr:
-                cmd = f"{ADB_PATH} -s {serial} shell \"mount -o remount,rw /system\""
+                cmd = f"{ADB_CMD} -s {serial} shell \"mount -o remount,rw /system\""
                 stdout, stderr, returncode = run_command(cmd, timeout=10)
 
             return stdout, stderr, returncode
@@ -524,7 +524,7 @@ class ADBService:
                 time.sleep(0.5)
                 continue
             stdout, stderr, returncode = run_command(
-                f"{ADB_PATH} -s {serial} shell chmod {permissions} {remote_file}")
+                f"{ADB_CMD} -s {serial} shell chmod {permissions} {remote_file}")
             if returncode == 0 and not stderr:
                 return stdout, stderr, returncode
         return "", f"ADB 连接未就绪（{ip}:5555 不在设备列表）", -1
@@ -557,7 +557,7 @@ class ADBService:
                     return False
 
                 serial = ADBService.get_online_serial(ip) or ADBService.get_device_serial(ip)
-                cmd = f"{ADB_PATH} -s {serial} shell ls -l {remote_file}"
+                cmd = f"{ADB_CMD} -s {serial} shell ls -l {remote_file}"
                 stdout, stderr, returncode = run_command(cmd, timeout=5 if is_fast_check else 10)
 
                 if returncode == 0 and not stderr and "No such" not in stdout:

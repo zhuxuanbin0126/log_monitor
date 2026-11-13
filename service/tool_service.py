@@ -10,6 +10,7 @@ import re
 import json
 from config import (
     supported_dev_types, getinfo_path, USE_PYTHON_PASSWORD, USE_PROTOCOL_QUERY,
+    PROTOCOL_CONNECT_TIMEOUT, PROTOCOL_RECV_TIMEOUT,
 )
 import html
 import threading
@@ -17,7 +18,7 @@ import queue
 import hashlib
 
 from .device_utils import (
-    get_project_root, PROJECT_ROOT, TOOLS_DIR, ADB_PATH,
+    get_project_root, PROJECT_ROOT, TOOLS_DIR, ADB_CMD,
     ANDROID_DEV_TYPES, LINUX_DEV_TYPES, DEVICE_OTG_CONFIG,
     get_tool_path, run_command, calculate_md5, is_android_device,
 )
@@ -52,7 +53,8 @@ class ToolService:
         """执行命令并返回输出，支持超时控制"""
         return run_command(cmd, encoding, timeout)
     @staticmethod
-    def _build_device_info(device_id, ip, password, enable_adb_fallback=True):
+    def _build_device_info(device_id, ip, password, enable_adb_fallback=True,
+                           connect_timeout=None, recv_timeout=None):
         """组装单台设备的信息字典（设备列表 9 列所需的全部字段）。
 
         - **Android**：优先**一次协议 Get** 取
@@ -67,6 +69,9 @@ class ToolService:
             enable_adb_fallback: 回落 adb/SSH 时是否顺带尝试开启网络 ADB。
                 ``get_device_info``（刷新设备列表）传 True 保持原行为；
                 ``get_device_list``（监控取列表）传 False，避免每轮都去连 adb。
+            connect_timeout / recv_timeout: 协议通道的超时覆盖（秒）。
+                ``None`` 表示用 ``config`` 默认值；刷新线程用「短超时首试 +
+                长超时兜底」的分级策略，减少不可达设备的无效等待。
         """
         info = {
             'mac_address': "N/A",
@@ -93,7 +98,11 @@ class ToolService:
         # Android：协议优先（一次 Get）
         if USE_PROTOCOL_QUERY:
             try:
-                protocol_info = query_device_info(ip)
+                protocol_info = query_device_info(
+                    ip,
+                    connect_timeout=(connect_timeout or PROTOCOL_CONNECT_TIMEOUT),
+                    recv_timeout=(recv_timeout or PROTOCOL_RECV_TIMEOUT),
+                )
             except Exception as exc:  # pylint: disable=broad-except
                 logger.debug("设备 %s 协议设备信息查询异常: %s", device_id, exc)
                 protocol_info = None
@@ -113,11 +122,13 @@ class ToolService:
 
         # 回落：原有 adb/SSH 流程
         adb_status = '未知'
+        adb_serial = ''
         if enable_adb_fallback:
             try:
                 logger.info("[ToolService] 刷新设备 %s，尝试确保网络 ADB 已开启", device_id)
                 adb_ok, serial = ADBDeviceManager.ensure_adb_connected(ip, password, device_id)
                 adb_status = '开启' if adb_ok else '未开启'
+                adb_serial = serial if adb_ok else ''
                 logger.info("[ToolService] 设备 %s ADB 状态: %s, serial=%s", device_id, adb_status, serial)
             except Exception as adb_e:  # pylint: disable=broad-except
                 adb_status = '未开启'
@@ -125,10 +136,13 @@ class ToolService:
         else:
             adb_status = ADBDeviceManager.get_cached_status(device_id)
 
+        # 复用上面已建立的 adb 连接（有 serial 时不再重复 connect + sleep(0.5)）
         mac_address, device_name, system_type = ToolService.get_advanced_device_info(
-            device_id, ip, password
+            device_id, ip, password, serial=adb_serial or None
         )
-        ota_version, main_version = ToolService.get_version_info(device_id, ip, password)
+        ota_version, main_version = ToolService.get_version_info(
+            device_id, ip, password, serial=adb_serial or None
+        )
         info.update({
             'mac_address': mac_address,
             'device_name': device_name,
@@ -177,7 +191,7 @@ class ToolService:
         return devices
 
     @staticmethod
-    def get_advanced_device_info(device_id, ip, password):
+    def get_advanced_device_info(device_id, ip, password, serial=None):
         """
         获取设备的高级信息（MAC、设备名称、系统类型）
         根据设备类型自动选择ADB或SSH方式
@@ -192,20 +206,23 @@ class ToolService:
         try:
             if ToolService.is_android_device(device_id):
                 # Android设备使用ADB方式
-                # 连接设备
-                ToolService.run_command(f"{ADB_PATH} connect {ip}:5555")
-                time.sleep(0.5)
-                serial = ToolService.adb_get_device_serial(ip)
+                # serial 已由调用方（ensure_adb_connected）建立时直接复用，
+                # 省掉一次 connect + 0.5s 固定等待 + 结尾的 disconnect
+                own_connection = not serial
+                if own_connection:
+                    ToolService.run_command(f"{ADB_CMD} connect {ip}:5555")
+                    time.sleep(0.5)
+                    serial = ToolService.adb_get_device_serial(ip)
                 
                 # 尝试通过getdeviceinfo.sh获取信息（如果存在）
                 try:
                     # 先检查脚本是否存在
-                    check_cmd = f"{ADB_PATH} -s {serial} shell ls /data/getdeviceinfo.sh"
+                    check_cmd = f"{ADB_CMD} -s {serial} shell ls /data/getdeviceinfo.sh"
                     stdout, stderr, returncode = ToolService.run_command(check_cmd, timeout=5)
                     
                     if not stderr and "No such" not in stdout:
                         # 脚本存在，执行它
-                        cmd = f"{ADB_PATH} -s {serial} shell sh /data/getdeviceinfo.sh"
+                        cmd = f"{ADB_CMD} -s {serial} shell sh /data/getdeviceinfo.sh"
                         stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
                         if stdout and not stderr:
                             info_parts = stdout.strip().split()
@@ -219,20 +236,21 @@ class ToolService:
                 # 如果没有获取到信息，尝试直接获取
                 if mac_address == "N/A":
                     # 获取MAC地址
-                    cmd = f"{ADB_PATH} -s {serial} shell cat /sys/class/net/eth0/address"
+                    cmd = f"{ADB_CMD} -s {serial} shell cat /sys/class/net/eth0/address"
                     stdout, stderr, returncode = ToolService.run_command(cmd, timeout=5)
                     if stdout and not stderr:
                         mac_address = stdout.strip()
                     
                     # 获取设备名称
-                    cmd = f"{ADB_PATH} -s {serial} shell getprop ro.product.model"
+                    cmd = f"{ADB_CMD} -s {serial} shell getprop ro.product.model"
                     stdout, stderr, returncode = ToolService.run_command(cmd, timeout=5)
                     if stdout and not stderr:
                         device_name = stdout.strip()
                     
                     system_type = "Android"
                 
-                ToolService.run_command(f"{ADB_PATH} disconnect {ip}:5555")
+                if own_connection:
+                    ToolService.run_command(f"{ADB_CMD} disconnect {ip}:5555")
             else:
                 # Linux设备使用SSH方式
                 # 初始化连接
@@ -240,7 +258,7 @@ class ToolService:
                 if not stderr:
                     plink_exe = ToolService.get_tool_path('plink.exe')
                     getinfo_path_fixed = os.path.normpath(getinfo_path)
-                    cmd = f'{plink_exe} -batch -no-antispoof -l root -pw "{password}" "{ip}" -m {getinfo_path_fixed}'
+                    cmd = f'"{plink_exe}" -batch -no-antispoof -l root -pw "{password}" "{ip}" -m "{getinfo_path_fixed}"'
                     stdout, stderr, returncode = ToolService.run_command(cmd, timeout=15)
                     if stdout and not stderr:
                         try:
@@ -257,7 +275,7 @@ class ToolService:
         return mac_address, device_name, system_type
 
     @staticmethod
-    def get_version_info(device_id, ip, password):
+    def get_version_info(device_id, ip, password, serial=None):
         """
         获取设备的版本信息（OTA版本、主版本）
         根据设备类型自动选择ADB或SSH方式
@@ -271,18 +289,21 @@ class ToolService:
         try:
             if ToolService.is_android_device(device_id):
                 # Android设备使用ADB方式
-                ToolService.run_command(f"{ADB_PATH} connect {ip}:5555")
-                time.sleep(0.5)
-                serial = ToolService.adb_get_device_serial(ip)
+                # serial 已由调用方建立时复用，省一次 connect + 0.5s 等待
+                own_connection = not serial
+                if own_connection:
+                    ToolService.run_command(f"{ADB_CMD} connect {ip}:5555")
+                    time.sleep(0.5)
+                    serial = ToolService.adb_get_device_serial(ip)
 
                 # 获取OTA版本
-                cmd = f"{ADB_PATH} -s {serial} shell getprop ro.build.version"
+                cmd = f"{ADB_CMD} -s {serial} shell getprop ro.build.version"
                 stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
                 if stdout and not stderr:
                     ota_version = stdout.strip()
 
                 # 获取主版本
-                cmd = f"{ADB_PATH} -s {serial} shell dumpsys package cn.huidu.lcd.player"
+                cmd = f"{ADB_CMD} -s {serial} shell dumpsys package cn.huidu.lcd.player"
                 stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
                 if stdout and not stderr:
                     lines = stdout.strip().split('\n')
@@ -293,7 +314,8 @@ class ToolService:
                                 main_version = ver_parts[1].strip()
                                 break
 
-                ToolService.run_command(f"{ADB_PATH} disconnect {ip}:5555")
+                if own_connection:
+                    ToolService.run_command(f"{ADB_CMD} disconnect {ip}:5555")
             else:
                 # Linux 机型（C08L/C16L/D16/D36/Q910）：
                 #  · **无 OTA 版本**（设备端不存在 OTA 版本文件）→ 固定 N/A，跳过查询；
@@ -306,13 +328,16 @@ class ToolService:
         return ota_version, main_version
 
     @staticmethod
-    def get_device_info(device_stdout, pattern):
+    def get_device_info(device_stdout, pattern, connect_timeout=None, recv_timeout=None):
         """
         解析一行设备原始信息并补全设备详情。
 
         Android 设备优先走协议**一次 Get**（一次往返拿全 MAC / 设备名 / 主版本 /
         OTA / ADB 开启情况），协议不可用才回落原有的「开启网络 ADB + adb/SSH 取数」；
         Linux 设备只取设备密码。
+
+        ``connect_timeout`` / ``recv_timeout``：协议通道超时覆盖，供刷新线程做
+        「短超时首试 + 长超时兜底」的分级重试。
         """
         try:
             # 过滤符合模式的设备
@@ -334,7 +359,9 @@ class ToolService:
             password = ToolService.get_password(device_id)
 
             device_info = {'id': device_id, 'ip': ip, 'password': password}
-            device_info.update(ToolService._build_device_info(device_id, ip, password))
+            device_info.update(ToolService._build_device_info(
+                device_id, ip, password,
+                connect_timeout=connect_timeout, recv_timeout=recv_timeout))
 
             return device_info
         except Exception as e:
@@ -399,7 +426,7 @@ class ToolService:
         
         # 执行远程命令
         plink_exe = ToolService.get_tool_path('plink.exe')
-        cmd = f"{plink_exe} -batch -no-antispoof -l root -pw \"{password}\" \"{ip}\" -m {script_filename}"
+        cmd = f"\"{plink_exe}\" -batch -no-antispoof -l root -pw \"{password}\" \"{ip}\" -m \"{script_filename}\""
         stdout, stderr, returncode = ToolService.run_command(cmd)
         # 清理临时文件
         if os.path.exists(script_filename):
@@ -429,7 +456,7 @@ class ToolService:
         对于Android设备，此方法主要用于回退场景
         """
         plink_exe = ToolService.get_tool_path('plink.exe')
-        cmd = f'echo y | {plink_exe} -l root -pw "{password}" "{ip}" "exit"'
+        cmd = f'echo y | "{plink_exe}" -l root -pw "{password}" "{ip}" "exit"'
         stdout, stderr, returncode = ToolService.run_command(cmd, timeout=10)
         return stdout, stderr, returncode
 
@@ -648,7 +675,7 @@ class ToolService:
                         full_cmd = f'cd {working_dir} && {cmd}'
                     else:
                         full_cmd = cmd
-                    ssh_cmd = f'echo y | {plink_exe} -batch -l root -pw "{password}" "{ip}" "{full_cmd}"'
+                    ssh_cmd = f'echo y | "{plink_exe}" -batch -l root -pw "{password}" "{ip}" "{full_cmd}"'
                     stdout, stderr, returncode = ToolService.run_command(ssh_cmd, timeout=30)
                     
                     # 如果成功或者不是连接类错误，直接返回

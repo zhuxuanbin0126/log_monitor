@@ -263,8 +263,8 @@ def _sftp_get(client, remote_file: str, local_file: str) -> None:
 def _pscp_command(action: str, password: str, first: str, second: str) -> str:
     pscp_exe = get_tool_path('pscp.exe')
     if action == "put":
-        return f'{pscp_exe} -batch -pw "{password}" "{first}" root@{second}'
-    return f'{pscp_exe} -batch -pw "{password}" root@{first} "{second}"'
+        return f'"{pscp_exe}" -batch -pw "{password}" "{first}" root@{second}'
+    return f'"{pscp_exe}" -batch -pw "{password}" root@{first} "{second}"'
 
 
 def _pscp_put(host: str, password: str, local_file: str, remote_file: str):

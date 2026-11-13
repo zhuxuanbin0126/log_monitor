@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import json
+import shutil
 import threading
 import queue
 import hashlib
@@ -81,6 +82,51 @@ TOOLS_DIR = os.path.normpath(
     EXTERNAL_TOOLS_DIR if os.path.isdir(EXTERNAL_TOOLS_DIR)
     else (BUNDLED_TOOLS_DIR or EXTERNAL_TOOLS_DIR))
 ADB_PATH = get_tool_path('adb.exe')
+"""随包 adb 的绝对路径（外部 tools/bin 优先，其次 onefile 解压目录）。
+
+注意：仅作**路径**使用（存在性判断、日志展示）。拼进 shell 命令串时请用
+:data:`ADB_CMD`，它已带引号，避免安装路径含空格时命令被 cmd 截断。
+"""
+
+
+def has_bundled_adb() -> bool:
+    """随包 adb 是否真实存在。"""
+    return os.path.isfile(ADB_PATH)
+
+
+def _shell_quote(path: str) -> str:
+    """把可执行文件路径包成 shell 安全形式（``shell=True`` 使用）。"""
+    return f'"{path}"' if " " in path else path
+
+
+ADB_CMD = _shell_quote(ADB_PATH) if has_bundled_adb() else "adb"
+"""adb 命令前缀，可直接拼进 ``shell=True`` 的命令串。
+
+- 随包 adb 存在：绝对路径（必要时带引号），**不经过系统 PATH**，
+  因此机器上别的 ``adb.exe`` 无法抢占；
+- 随包 adb 缺失：退化为裸 ``adb``（走系统 PATH），并在启动日志里记录一条
+  明确警告，见 :func:`adb_resolution_status`。
+"""
+
+
+def adb_resolution_status() -> dict:
+    """随包 adb 的解析结果快照（启动日志用，便于现场定位「调到了别人的 adb」）。"""
+    bundled = has_bundled_adb()
+    on_path = shutil.which("adb.exe") or shutil.which("adb") or ""
+    return {
+        "bundled_path": ADB_PATH,
+        "bundled_ok": bundled,
+        "command": ADB_CMD,
+        # 回退 PATH 时才非空，用于判断是否存在被抢占风险
+        "path_adb": on_path,
+        "hijacked": bool(on_path) and bundled and os.path.normcase(
+            os.path.abspath(on_path)) != os.path.normcase(os.path.abspath(ADB_PATH)),
+    }
+
+
+# Windows 下 Popen 隐藏控制台窗口，避免 GUI 进程调用外部工具时闪黑框
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_POPEN_FLAGS = {"creationflags": _CREATE_NO_WINDOW} if os.name == "nt" else {}
 
 
 def tools_status(names=None):
@@ -163,6 +209,7 @@ def run_command(cmd, encoding='utf-8', timeout=30, env=None):
                 text=True,
                 encoding=encoding,
                 env=child_env,
+                **_POPEN_FLAGS,
             )
             stdout, stderr = proc.communicate(timeout=timeout)
             result_queue.put((stdout.strip(), stderr.strip(), proc.returncode))
