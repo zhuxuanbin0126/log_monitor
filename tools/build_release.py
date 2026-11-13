@@ -29,12 +29,13 @@ RUNTIME_ITEMS = [
     "tools",
     "device_info.json",
     "README.md",
+    "README_1.0.7.0.md",
     "LICENSE",
     "CHANGELOG.md",
     "用户手册.md",
     "用户手册.pdf",
+    "设备监控系统操作手册.md",
     "设备监控系统操作手册.pdf",
-    "发布说明_V1.0.6.3.md",
 ]
 
 
@@ -111,7 +112,7 @@ def stage_release() -> None:
     _clean_release()
 
     shutil.copy2(exe, RELEASE / exe.name)
-    for name in RUNTIME_ITEMS:
+    for name in RUNTIME_ITEMS + [f"发布说明_V{get_config_version()}.md"]:
         src = ROOT / name
         dst = RELEASE / name
         if src.is_dir():
@@ -136,7 +137,7 @@ def write_sha256_manifest() -> Path:
 
 def make_zip(version: str) -> Path:
     print("[4/4] 生成 zip...")
-    zip_path = RELEASE / f"log_monitor_v{version}.zip"
+    zip_path = RELEASE / f"log_monitor_{version}_win64.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(RELEASE.rglob("*")):
             if not path.is_file() or path == zip_path or not _in_package(path):
