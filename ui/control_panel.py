@@ -1,8 +1,8 @@
-from PyQt5.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QGroupBox, QSpinBox, QCheckBox, QFileDialog, QLineEdit
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PySide6.QtCore import Qt, Signal
 from config import default_dev_type, supported_dev_types
 from service.discovery.manual_finder import format_target_spec_hint
 
@@ -10,15 +10,15 @@ from service.discovery.manual_finder import format_target_spec_hint
 class ControlPanel(QWidget):
     """控制面板类，负责顶部控制面板的功能"""
     # 定义信号
-    refresh_clicked = pyqtSignal()
-    dev_type_changed = pyqtSignal(str)
-    enable_adb_clicked = pyqtSignal()
-    clear_history_clicked = pyqtSignal()
-    stop_task_clicked = pyqtSignal()
-    resume_task_clicked = pyqtSignal()
-    start_monitor_clicked = pyqtSignal(int, bool, bool, bool, bool, str)
-    stop_monitor_clicked = pyqtSignal()
-    query_selected_clicked = pyqtSignal(str)
+    refresh_clicked = Signal()
+    dev_type_changed = Signal(str)
+    enable_adb_clicked = Signal()
+    clear_history_clicked = Signal()
+    stop_task_clicked = Signal()
+    resume_task_clicked = Signal()
+    start_monitor_clicked = Signal(int, bool, bool, bool, bool, str)
+    stop_monitor_clicked = Signal()
+    query_selected_clicked = Signal(str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,7 +62,7 @@ class ControlPanel(QWidget):
         self.manual_find_check = QCheckBox("手动找卡")
         self.manual_find_check.setToolTip(
             "勾选后按右侧目标定向找卡；目标为空时仍走普通刷新（广播找卡）")
-        self.manual_find_check.stateChanged.connect(self.on_manual_find_toggled)
+        self.manual_find_check.checkStateChanged.connect(self.on_manual_find_toggled)
 
         self.manual_targets_edit = QLineEdit()
         self.manual_targets_edit.setPlaceholderText(
@@ -212,7 +212,7 @@ class ControlPanel(QWidget):
 
         # 第三排：中断 / 继续执行上一个任务（任务状态统一显示在左下角状态栏）
         task_row_layout = QHBoxLayout()
-        task_row_layout.setAlignment(Qt.AlignLeft)
+        task_row_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         self.stop_task_button = QPushButton("中断任务")
         self.stop_task_button.setEnabled(False)
@@ -251,7 +251,7 @@ class ControlPanel(QWidget):
         
     def on_manual_find_toggled(self, state):
         """勾选/取消「手动找卡」：目标输入框随之可用/禁用。"""
-        enabled = state == Qt.Checked
+        enabled = state == Qt.CheckState.Checked
         self.manual_targets_edit.setEnabled(enabled)
         if enabled:
             # 勾选后把焦点放进输入框，直接填目标（也可留空 → 等价普通刷新）
@@ -327,9 +327,8 @@ class ControlPanel(QWidget):
         
     def on_screenshot_path_clicked(self):
         """截图存储位置选择按钮点击事件"""
-        options = QFileDialog.Options()
-        options |= QFileDialog.ShowDirsOnly
-        options |= QFileDialog.DontResolveSymlinks
+        options = (QFileDialog.Option.ShowDirsOnly
+                   | QFileDialog.Option.DontResolveSymlinks)
         
         directory = QFileDialog.getExistingDirectory(
             self, "选择截图存储位置", 

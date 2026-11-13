@@ -1,4 +1,4 @@
-from PyQt5.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 import socket
 import threading
 
@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 
 class _DeviceInfoRefresher(QThread):
     """后台线程：ADB 开启成功后异步刷新设备信息，避免阻塞查询线程"""
-    info_ready = pyqtSignal(str, dict)  # device_id, info_dict
+    info_ready = Signal(str, dict)  # device_id, info_dict
 
     def __init__(self, device_id, ip, password):
         super().__init__()
@@ -31,7 +31,7 @@ class _DeviceInfoRefresher(QThread):
 
     def run(self):
         try:
-            from service.device_utils import ADB_PATH
+            from service.device_utils import ADB_CMD
             info = {}
             success, serial = ADBDeviceManager.ensure_adb_connected(
                 self.ip, self.password, self.device_id
@@ -40,13 +40,13 @@ class _DeviceInfoRefresher(QThread):
                 return
 
             mac_stdout, _, _ = ToolService.run_command(
-                f'{ADB_PATH} -s {serial} shell cat /sys/class/net/eth0/address', timeout=5
+                f'{ADB_CMD} -s {serial} shell cat /sys/class/net/eth0/address', timeout=5
             )
             name_stdout, _, _ = ToolService.run_command(
-                f'{ADB_PATH} -s {serial} shell getprop ro.product.model', timeout=5
+                f'{ADB_CMD} -s {serial} shell getprop ro.product.model', timeout=5
             )
             version_stdout, _, _ = ToolService.run_command(
-                f'{ADB_PATH} -s {serial} shell getprop ro.build.version', timeout=5
+                f'{ADB_CMD} -s {serial} shell getprop ro.build.version', timeout=5
             )
 
             info['mac_address'] = mac_stdout.strip() if mac_stdout else 'N/A'
@@ -56,7 +56,7 @@ class _DeviceInfoRefresher(QThread):
             info['adb_status'] = '开启'
 
             dumpsys_out, _, _ = ToolService.run_command(
-                f'{ADB_PATH} -s {serial} shell dumpsys package cn.huidu.lcd.player',
+                f'{ADB_CMD} -s {serial} shell dumpsys package cn.huidu.lcd.player',
                 timeout=10
             )
             if dumpsys_out:
@@ -75,11 +75,11 @@ class _DeviceInfoRefresher(QThread):
 class SerialQueryManager(QThread):
     """串行查询管理器，确保设备逐个依次执行，避免ADB连接冲突"""
     
-    result_signal = pyqtSignal(str, dict)
-    error_signal = pyqtSignal(str, str)  # (device_id, error_msg)
-    finished_signal = pyqtSignal(int)
-    state_signal = pyqtSignal(str, str)  # (device_id, state) 状态追踪信号
-    progress_signal = pyqtSignal(int, int)  # (current, total) 进度信号
+    result_signal = Signal(str, dict)
+    error_signal = Signal(str, str)  # (device_id, error_msg)
+    finished_signal = Signal(int)
+    state_signal = Signal(str, str)  # (device_id, state) 状态追踪信号
+    progress_signal = Signal(int, int)  # (current, total) 进度信号
     
     # 查询状态枚举
     STATE_IDLE = "IDLE"

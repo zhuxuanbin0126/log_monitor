@@ -13,7 +13,7 @@
 :func:`service.protocol.set_query.set_development` 自动走 KeyEvent 解锁后重发。
 """
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 from service.logging_service import get_logger
 from service.protocol.set_query import ADB_MODE_BOTH, ADB_TIMER_ON, set_development
@@ -24,9 +24,9 @@ logger = get_logger(__name__)
 class EnableAdbWorker(QThread):
     """逐台下发 ``Set Development`` 开启 Android 设备的 usb+tcp ADB（永久）。"""
 
-    progress_signal = pyqtSignal(str)
-    device_done = pyqtSignal(str, bool, str)   # device_id, 是否成功, 说明
-    finished_signal = pyqtSignal(int, int)     # 成功数, 总数
+    progress_signal = Signal(str)
+    device_done = Signal(str, bool, str)   # device_id, 是否成功, 说明
+    finished_signal = Signal(int, int)     # 成功数, 总数
 
     def __init__(self, devices, parent=None):
         """

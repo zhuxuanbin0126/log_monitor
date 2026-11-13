@@ -1,7 +1,7 @@
 import time
-from PyQt5.QtWidgets import (QApplication, QMessageBox, QDialog, QWidget,
-                              QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
-                              QPushButton, QGroupBox, QGridLayout, QFileDialog, 
+from PySide6.QtWidgets import (QApplication, QMessageBox, QDialog, QWidget,
+                              QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+                              QPushButton, QGroupBox, QGridLayout, QFileDialog,
                               QScrollArea)
 from datetime import datetime
 import os
@@ -147,7 +147,7 @@ class MainWindow(BaseWindow):
             from service.adb_device_manager import ADBDeviceManager
             from service.adb_service import ADBService
             from service.tool_service import ToolService
-            from service.device_utils import ADB_PATH
+            from service.device_utils import ADB_CMD
 
             if not ADBDeviceManager.should_use_adb(device_id):
                 return
@@ -157,9 +157,9 @@ class MainWindow(BaseWindow):
                 return
 
             # 使用 adb -s serial shell 批量获取信息
-            mac_cmd = f'{ADB_PATH} -s {serial} shell cat /sys/class/net/eth0/address'
-            name_cmd = f'{ADB_PATH} -s {serial} shell getprop ro.product.model'
-            version_cmd = f'{ADB_PATH} -s {serial} shell getprop ro.build.version'
+            mac_cmd = f'{ADB_CMD} -s {serial} shell cat /sys/class/net/eth0/address'
+            name_cmd = f'{ADB_CMD} -s {serial} shell getprop ro.product.model'
+            version_cmd = f'{ADB_CMD} -s {serial} shell getprop ro.build.version'
 
             mac_stdout, _, _ = ToolService.run_command(mac_cmd, timeout=5)
             name_stdout, _, _ = ToolService.run_command(name_cmd, timeout=5)
@@ -172,7 +172,7 @@ class MainWindow(BaseWindow):
 
             # 主版本通过 dumpsys package 获取（播放器版本）
             main_version = 'N/A'
-            dumpsys_cmd = f'{ADB_PATH} -s {serial} shell dumpsys package cn.huidu.lcd.player'
+            dumpsys_cmd = f'{ADB_CMD} -s {serial} shell dumpsys package cn.huidu.lcd.player'
             dumpsys_out, _, _ = ToolService.run_command(dumpsys_cmd, timeout=10)
             if dumpsys_out:
                 for line in dumpsys_out.strip().split('\n'):
@@ -396,10 +396,10 @@ class MainWindow(BaseWindow):
         reply = QMessageBox.question(
             self, "监控确认",
             f"{summary}\n\n是否开始正式监控？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
-        if reply == QMessageBox.No:
+        if reply == QMessageBox.StandardButton.No:
             self.log("监控已取消")
             return
 
@@ -679,7 +679,7 @@ class MainWindow(BaseWindow):
             
             # 弹出确认对话框
             dialog = CountInitConfirmDialog(selected_devices_info, tool_path, parent=self)
-            if dialog.exec_() != QDialog.Accepted:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
                 self.log("开关机初始化操作已取消")
                 return
             
@@ -690,7 +690,7 @@ class MainWindow(BaseWindow):
         if query_type == "upgrade_program":
             selected_devices_info = self.device_list_view.get_selected_devices_info()
             dialog = UpgradeConfirmDialog(selected_devices_info, program_path, parent=self)
-            if dialog.exec_() != QDialog.Accepted:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
                 self.log("发送节目操作已取消")
                 return
             custom_file_paths = dialog.get_file_paths()
@@ -1030,7 +1030,7 @@ class MainWindow(BaseWindow):
             return
 
         dialog = ClearHistoryDialog(self.dev_type, parent=self)
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             self.log("清理历史数据已取消")
             return
 
@@ -1095,11 +1095,11 @@ class MainWindow(BaseWindow):
                 self, 
                 "关闭确认", 
                 "监控正在运行中，确定要关闭应用程序吗？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
             )
             
-            if reply == QMessageBox.No:
+            if reply == QMessageBox.StandardButton.No:
                 event.ignore()
                 return
         

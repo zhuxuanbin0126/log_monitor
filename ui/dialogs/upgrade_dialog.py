@@ -5,7 +5,7 @@
 
 import os
 
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                               QLineEdit, QPushButton, QGroupBox, QGridLayout,
                               QFileDialog, QScrollArea, QWidget, QMessageBox)
 

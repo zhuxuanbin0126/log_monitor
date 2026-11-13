@@ -13,7 +13,7 @@
 
 import re
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 from config import UDP_SCAN_TIMEOUT, supported_dev_types
 from service.discovery import scan_devices, scan_targets
@@ -26,12 +26,12 @@ logger = get_logger(__name__)
 class DiscoveryThread(QThread):
     """异步执行 UDP 找卡的线程，避免阻塞主线程。"""
 
-    progress_signal = pyqtSignal(str)
-    raw_list_signal = pyqtSignal(list)
-    device_found = pyqtSignal(str, str)
+    progress_signal = Signal(str)
+    raw_list_signal = Signal(list)
+    device_found = Signal(str, str)
     """发现一台设备即上报 ``(device_id, ip)``，供 UI 即时反馈（详情随后补全）。"""
-    error_signal = pyqtSignal(str)
-    finished_signal = pyqtSignal()
+    error_signal = Signal(str)
+    finished_signal = Signal()
 
     def __init__(self, dev_type: str, targets=None, timeout: float = UDP_SCAN_TIMEOUT,
                  parent=None):

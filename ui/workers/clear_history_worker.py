@@ -6,7 +6,7 @@
 删除动作全部在 Worker 线程完成，GUI 线程只接收信号，避免大量文件 I/O 卡住界面。
 """
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 from service.history_cleaner import execute_plan, summarize_results
 from service.logging_service import get_logger
@@ -17,9 +17,9 @@ logger = get_logger(__name__)
 class ClearHistoryWorker(QThread):
     """执行清理规划，逐条上报结果，最后给一份汇总。"""
 
-    item_done = pyqtSignal(object)
+    item_done = Signal(object)
     """单个条目清理完成（:class:`service.history_cleaner.CleanResult`）。"""
-    finished_signal = pyqtSignal(int, int, str)
+    finished_signal = Signal(int, int, str)
     """``(删除文件数, 失败条目数, 汇总文案)``。"""
 
     def __init__(self, plan, parent=None):

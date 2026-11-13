@@ -3,8 +3,8 @@
 
 """清理历史数据对话框：选择清理范围 + 预览确切路径与文件清单。"""
 
-from PyQt5.QtGui import QFont
-from PyQt5.QtWidgets import (QCheckBox, QDialog, QGroupBox, QHBoxLayout, QLabel,
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (QCheckBox, QDialog, QGroupBox, QHBoxLayout, QLabel,
                               QMessageBox, QPlainTextEdit, QPushButton,
                               QRadioButton, QVBoxLayout)
 
@@ -48,7 +48,7 @@ class ClearHistoryDialog(QDialog):
         for scope in ALL_SCOPES:
             checkbox = QCheckBox(SCOPE_LABELS[scope])
             checkbox.setChecked(scope in DEFAULT_SCOPES)
-            checkbox.stateChanged.connect(self._refresh_preview)
+            checkbox.checkStateChanged.connect(self._refresh_preview)
             self.scope_checks[scope] = checkbox
             scope_layout.addWidget(checkbox)
         layout.addWidget(scope_box)

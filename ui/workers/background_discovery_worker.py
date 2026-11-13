@@ -18,7 +18,7 @@
 
 import time
 
-from PyQt5.QtCore import QObject, QThread, pyqtSignal
+from PySide6.QtCore import QObject, QThread, Signal
 
 from config import (
     BACKGROUND_DISCOVERY_INTERVAL_MS, BACKGROUND_DISCOVERY_OFFLINE_GRACE,
@@ -37,7 +37,7 @@ _STOP_POLL_SECONDS = 0.1
 class _ProbeWorker(QThread):
     """探测线程：循环「一轮有界探测 → 上报 → 睡眠间隔」，直到 stop()。"""
 
-    probed = pyqtSignal(list)
+    probed = Signal(list)
 
     def __init__(self, probe_seconds: float, interval_seconds: float, parent=None):
         super().__init__(parent)
@@ -70,7 +70,7 @@ class _ProbeWorker(QThread):
 class BackgroundDiscovery(QObject):
     """后台心跳找卡控制器；仅当设备上下线时才发 ``changed`` 信号。"""
 
-    changed = pyqtSignal(list, list)
+    changed = Signal(list, list)
     """``(added, removed)``，均为 ``[(device_id, ip), ...]``；无变化则不发。"""
 
     def __init__(self, parent=None, *, interval_ms=None, probe_seconds=None,

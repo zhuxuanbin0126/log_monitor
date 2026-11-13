@@ -1,5 +1,5 @@
-from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QSplitter, QStatusBar
-from PyQt5.QtCore import Qt
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QSplitter, QStatusBar
+from PySide6.QtCore import Qt
 from config import VERSION
 
 class BaseWindow(QMainWindow):
@@ -18,7 +18,7 @@ class BaseWindow(QMainWindow):
         self.main_layout = QVBoxLayout(self.central_widget)
         
         # 创建分割器
-        self.splitter = QSplitter(Qt.Vertical)
+        self.splitter = QSplitter(Qt.Orientation.Vertical)
         
         # 状态栏
         self.statusBar().showMessage("就绪")

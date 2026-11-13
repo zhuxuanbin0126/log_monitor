@@ -1,14 +1,15 @@
 import os
 import time
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTextEdit, QMenu, QAction, QPushButton, QHBoxLayout, QMessageBox
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTextEdit, QMenu, QPushButton, QHBoxLayout, QMessageBox
+from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from datetime import datetime
 
 class ResultDisplayView(QWidget):
     """结果显示视图类，负责日志的显示和管理"""
     # 定义信号
-    clear_log_clicked = pyqtSignal()
+    clear_log_clicked = Signal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,7 +35,7 @@ class ResultDisplayView(QWidget):
         """创建日志显示区域"""
 
         result_layout = QHBoxLayout()
-        result_layout.setAlignment(Qt.AlignLeft)
+        result_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         self.result_display_clear_button = QPushButton("清除日志面板")
         self.result_display_clear_button.setFixedSize(80,25)
@@ -46,10 +47,10 @@ class ResultDisplayView(QWidget):
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.log_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         
         # 为日志显示框添加右键菜单
-        self.log_text.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.log_text.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.log_text.customContextMenuRequested.connect(self.show_log_context_menu)
         
         result_layout.addWidget(self.result_display_clear_button)
@@ -81,7 +82,7 @@ class ResultDisplayView(QWidget):
         clear_action.triggered.connect(self.clear_log)
         context_menu.addAction(clear_action)
         
-        context_menu.exec_(self.log_text.mapToGlobal(position))
+        context_menu.exec(self.log_text.mapToGlobal(position))
         
     def select_all_log(self):
         """全选日志内容"""
@@ -112,7 +113,7 @@ class ResultDisplayView(QWidget):
             f.write(self.log_text.toPlainText())
         # 统一使用正斜杠
         path = path.replace('\\', '/')
-        QMessageBox.information(None, '提示', f'日志导出成功\n导出位置：{path}',QMessageBox.Ok)
+        QMessageBox.information(None, '提示', f'日志导出成功\n导出位置：{path}',QMessageBox.StandardButton.Ok)
         self.log(f"日志导出成功,导出位置：{path}")
 
     def log(self, message, is_error=False, is_warning=False, stamp=False):
@@ -122,8 +123,8 @@ class ResultDisplayView(QWidget):
         旧写法会受上一行颜色或用户选区影响，导致「上线/下线」这类正常日志
         偶尔被染成红色。``stamp=True`` 时在行首加系统时间。
         """
-        from PyQt5.QtGui import QColor, QTextBlockFormat, QTextCharFormat
-        from PyQt5.QtGui import QTextCursor
+        from PySide6.QtGui import QColor, QTextBlockFormat, QTextCharFormat
+        from PySide6.QtGui import QTextCursor
 
         text = message
         if stamp:
@@ -139,7 +140,7 @@ class ResultDisplayView(QWidget):
         char_format.setForeground(color)
 
         cursor = self.log_text.textCursor()
-        cursor.movePosition(QTextCursor.End)
+        cursor.movePosition(QTextCursor.MoveOperation.End)
         if self.log_text.document().characterCount() > 1:   # 已有内容才另起一段
             cursor.insertBlock(QTextBlockFormat(), char_format)
         cursor.insertText(text, char_format)

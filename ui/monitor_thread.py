@@ -1,4 +1,4 @@
-from PyQt5.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 from business.device_monitor_service import DeviceMonitorService
 from service.batch_dispatch import run_windowed
 from service.tool_service import ToolService
@@ -13,11 +13,11 @@ logger = get_logger(__name__)
 
 class MonitorThread(QThread):
     """监控线程类，用于后台执行设备监控任务"""
-    update_signal = pyqtSignal(str)
-    device_list_signal = pyqtSignal(list)
-    status_signal = pyqtSignal(str)
-    error_signal = pyqtSignal(str, str, str)
-    monitor_result_signal = pyqtSignal(dict)
+    update_signal = Signal(str)
+    device_list_signal = Signal(list)
+    status_signal = Signal(str)
+    error_signal = Signal(str, str, str)
+    monitor_result_signal = Signal(dict)
 
     def __init__(self, config: MonitorConfig):
         """使用 MonitorConfig 数据类简化参数"""

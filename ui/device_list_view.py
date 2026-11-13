@@ -1,9 +1,11 @@
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, 
-    QTableWidgetItem, QGroupBox, QCheckBox, QMenu, QAction, QHeaderView, QLabel
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
+    QTableWidgetItem, QGroupBox, QCheckBox, QMenu, QHeaderView, QLabel,
+    QAbstractItemView
 )
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QApplication
 import json
 import os
 
@@ -33,8 +35,8 @@ def get_adb_usb_status(device_id):
 class DeviceListView(QWidget):
     """设备列表视图类，负责设备列表的显示和管理"""
     # 定义信号
-    device_selected = pyqtSignal(set)
-    device_list_updated = pyqtSignal(list)
+    device_selected = Signal(object)
+    device_list_updated = Signal(list)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,7 +73,7 @@ class DeviceListView(QWidget):
         for col_index, col_name in optional_columns:
             checkbox = QCheckBox(col_name)
             checkbox.setChecked(col_index in [3, 4])  # 默认显示主版本和OTA版本
-            checkbox.stateChanged.connect(lambda state, idx=col_index: self.toggle_column_visibility(idx, state))
+            checkbox.checkStateChanged.connect(lambda state, idx=col_index: self.toggle_column_visibility(idx, state))
             self.column_checkboxes[col_index] = checkbox
             column_control_layout.addWidget(checkbox)
         
@@ -81,7 +83,7 @@ class DeviceListView(QWidget):
         # 全选/取消全选
         select_layout = QHBoxLayout()
         self.select_all_check = QCheckBox("全选")
-        self.select_all_check.stateChanged.connect(self.on_select_all_changed)
+        self.select_all_check.checkStateChanged.connect(self.on_select_all_changed)
         select_layout.addWidget(self.select_all_check)
         select_layout.addStretch()
         
@@ -100,14 +102,14 @@ class DeviceListView(QWidget):
         self.device_table.setHorizontalHeaderLabels(col_list)
         
         # 设置表格样式：支持选中复制
-        self.device_table.setSelectionBehavior(QTableWidget.SelectItems)  # 允许选择单个单元格
-        self.device_table.setSelectionMode(QTableWidget.ContiguousSelection)  # 允许连续选择多个单元格
-        self.device_table.setEditTriggers(QTableWidget.NoEditTriggers)  # 禁止编辑
+        self.device_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)  # 允许选择单个单元格
+        self.device_table.setSelectionMode(QAbstractItemView.SelectionMode.ContiguousSelection)  # 允许连续选择多个单元格
+        self.device_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)  # 禁止编辑
         
         # 启用文本选择功能
-        self.device_table.setTextElideMode(Qt.ElideNone)  # 不截断文本
+        self.device_table.setTextElideMode(Qt.TextElideMode.ElideNone)  # 不截断文本
         self.device_table.setShowGrid(True)  # 显示表格网格线
-        self.device_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.device_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.device_table.customContextMenuRequested.connect(self.show_context_menu)  # 连接右键菜单
         
         # 设置行高（行间距）
@@ -117,12 +119,12 @@ class DeviceListView(QWidget):
         header = self.device_table.horizontalHeader()
         
         # 选项列（第0列）设置为固定宽度50
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.device_table.setColumnWidth(0, 60)
         
         # 其他列均匀分布
         for i in range(1, self.device_table.columnCount()):
-            header.setSectionResizeMode(i, QHeaderView.Stretch)
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
         
         header.setSectionsClickable(True)
         
@@ -190,63 +192,63 @@ class DeviceListView(QWidget):
 
         # 选择框
         check_item = QTableWidgetItem()
-        check_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-        check_item.setCheckState(Qt.Checked if device_id in self.selected_devices else Qt.Unchecked)
+        check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+        check_item.setCheckState(Qt.CheckState.Checked if device_id in self.selected_devices else Qt.CheckState.Unchecked)
         self.device_table.setItem(row, 0, check_item)
 
         # 设备ID
         id_item = QTableWidgetItem(device_id)
-        id_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        id_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.device_table.setItem(row, 1, id_item)
 
         # IP地址
         ip_item = QTableWidgetItem(device_info['ip'])
-        ip_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        ip_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.device_table.setItem(row, 2, ip_item)
 
         # 主版本
         main_version = device_info.get('main_version', 'N/A')
         main_version_item = QTableWidgetItem(main_version)
-        main_version_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        main_version_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.device_table.setItem(row, 3, main_version_item)
 
         # OTA版本
         ota_version = device_info.get('ota_version', 'N/A')
         ota_version_item = QTableWidgetItem(ota_version)
-        ota_version_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        ota_version_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.device_table.setItem(row, 4, ota_version_item)
 
         # MAC地址
         mac_item = QTableWidgetItem(device_info['mac_address'])
-        mac_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        mac_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.device_table.setItem(row, 5, mac_item)
 
         # 设备密码
         password_item = QTableWidgetItem(device_info['password'])
-        password_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        password_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.device_table.setItem(row, 6, password_item)
 
         # 设备名称
         name_item = QTableWidgetItem(device_info['device_name'])
-        name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        name_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.device_table.setItem(row, 7, name_item)
 
         # 系统类型
         system_type_item = QTableWidgetItem(device_info['system_type'])
-        system_type_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        system_type_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.device_table.setItem(row, 8, system_type_item)
 
         # 网络ADB / 有线ADB：优先使用 device_info 中的实时状态，回退到默认口径。
         # 两列都统一用黑色字体（不再用绿/橙/灰区分状态）
         adb_status = device_info.get('adb_status', get_adb_status(device_id))
         adb_item = QTableWidgetItem(adb_status)
-        adb_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        adb_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.device_table.setItem(row, 9, adb_item)
 
         adb_usb_status = (device_info.get('adb_usb_status')
                           or get_adb_usb_status(device_id))
         adb_usb_item = QTableWidgetItem(adb_usb_status)
-        adb_usb_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        adb_usb_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.device_table.setItem(row, 10, adb_usb_item)
 
         # 同步回写内存数据
@@ -259,7 +261,7 @@ class DeviceListView(QWidget):
             device_id = self.devices[row]['id']
             check_state = self.device_table.item(row, 0).checkState()
             
-            if check_state == Qt.Checked:
+            if check_state == Qt.CheckState.Checked:
                 self.selected_devices.add(device_id)
                 for info in self.devices:
                     if info['id'] == device_id:
@@ -279,7 +281,7 @@ class DeviceListView(QWidget):
             
     def on_select_all_changed(self, state):
         """全选/取消全选时的处理"""
-        if state == Qt.Checked:
+        if state == Qt.CheckState.Checked:
             for device_info in self.devices:
                 self.selected_devices.add(device_info['id'])
                 self.selected_devices_info = self.devices
@@ -292,7 +294,7 @@ class DeviceListView(QWidget):
             device_id = self.devices[row]['id']
             check_item = self.device_table.item(row, 0)
             if check_item:
-                check_item.setCheckState(Qt.Checked if device_id in self.selected_devices else Qt.Unchecked)
+                check_item.setCheckState(Qt.CheckState.Checked if device_id in self.selected_devices else Qt.CheckState.Unchecked)
         
         # 发出选中设备变化的信号
         self.device_selected.emit(self.selected_devices)
@@ -311,7 +313,7 @@ class DeviceListView(QWidget):
         context_menu.addAction(copy_action)
         
         # 在点击位置显示菜单
-        context_menu.exec_(self.device_table.mapToGlobal(position))
+        context_menu.exec(self.device_table.mapToGlobal(position))
         
     def copy_selected_text(self):
         """复制选中的文本到剪贴板"""
@@ -350,12 +352,12 @@ class DeviceListView(QWidget):
         selected_rows = []
         for row in range(self.device_table.rowCount()):
             item = self.device_table.item(row, 0)
-            if item and item.checkState() == Qt.Checked:
+            if item and item.checkState() == Qt.CheckState.Checked:
                 selected_rows.append(self.device_table.item(row, 1).text())
                 
         # 排序表格
         current_sort_order = self.device_table.horizontalHeader().sortIndicatorOrder()
-        new_sort_order = Qt.DescendingOrder if current_sort_order == Qt.AscendingOrder else Qt.AscendingOrder
+        new_sort_order = Qt.SortOrder.DescendingOrder if current_sort_order == Qt.SortOrder.AscendingOrder else Qt.SortOrder.AscendingOrder
         self.device_table.sortItems(column, new_sort_order)
         
         # 恢复选择状态
@@ -364,11 +366,11 @@ class DeviceListView(QWidget):
             if item and item.text() in selected_rows:
                 check_item = self.device_table.item(row, 0)
                 if check_item:
-                    check_item.setCheckState(Qt.Checked)
+                    check_item.setCheckState(Qt.CheckState.Checked)
             else:
                 check_item = self.device_table.item(row, 0)
                 if check_item:
-                    check_item.setCheckState(Qt.Unchecked)
+                    check_item.setCheckState(Qt.CheckState.Unchecked)
         
     def get_selected_devices(self):
         """获取选中的设备列表"""
@@ -418,7 +420,7 @@ class DeviceListView(QWidget):
             return
         
         # 根据状态显示或隐藏列
-        if state == Qt.Checked:
+        if state == Qt.CheckState.Checked:
             self.device_table.setColumnHidden(column_index, False)
         else:
             self.device_table.setColumnHidden(column_index, True)
@@ -440,6 +442,6 @@ class DeviceListView(QWidget):
                 }
                 if field in col_map:
                     item = QTableWidgetItem(str(value) if value is not None else 'N/A')
-                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                    item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                     self.device_table.setItem(row, col_map[field], item)
                 break
