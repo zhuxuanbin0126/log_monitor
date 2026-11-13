@@ -11,7 +11,7 @@
 
 import re
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PySide6.QtCore import QObject, Signal
 
 from config import USE_UDP_DISCOVERY, supported_dev_types
 from service.logging_service import get_logger
@@ -29,14 +29,14 @@ INFO_QUEUE_SIZE = 512
 class DeviceRefreshController(QObject):
     """负责“刷新设备列表”全流程，UI 只接收信号。"""
 
-    progress = pyqtSignal(str)
-    devices_ready = pyqtSignal(list)
-    device_found = pyqtSignal(str, str)
+    progress = Signal(str)
+    devices_ready = Signal(list)
+    device_found = Signal(str, str)
     """找卡过程中「发现即上报」``(device_id, ip)``（仅新 UDP 通道提供）。"""
-    device_row_updated = pyqtSignal(dict)
+    device_row_updated = Signal(dict)
     """单台设备详情补全完成即上报（用于**增量**更新表格行，不必等全部设备）。"""
-    failed = pyqtSignal(str)
-    finished = pyqtSignal()
+    failed = Signal(str)
+    finished = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -185,18 +185,29 @@ class DeviceRefreshController(QObject):
         for line in raw_lines:
             self._submit_line(line)
         self._submit_done = True
+        # 设备在扫描途中就已完成补全（或本轮一台都没发现）时，不会再有一次
+        # 「忙 → 闲」跳变，这里立即收尾，避免一直等不到 devices_ready。
+        if not self._incremental and (self._manager is None or not self._manager.has_pending()):
+            self._on_all_tasks_completed()
 
     def _on_device_info(self, device_info) -> None:
         if self._stopped:
             return
         if device_info:
-            self._devices.append(device_info)
+            # 同 id 覆盖：缓存先出一次、真实查询再出一次，属同一台设备
+            device_id = device_info.get('id')
+            for index, existing in enumerate(self._devices):
+                if existing.get('id') == device_id:
+                    self._devices[index] = device_info
+                    break
+            else:
+                self._devices.append(device_info)
             # 增量更新：每台设备详情到位就立即上报，不必等 allTasksCompleted
             self.device_row_updated.emit(device_info)
 
     def _on_all_tasks_completed(self) -> None:
         # 扫描未结束时的瞬时空闲不算收尾（否则会拿到不完整的设备列表）
-        if self._stopped or not self._submit_done:
+        if self._stopped or not self._submit_done or self._manager is None:
             return
         self._stop_manager()
         if self._incremental:

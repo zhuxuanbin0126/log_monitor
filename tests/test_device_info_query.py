@@ -327,10 +327,10 @@ def test_build_device_info_android_falls_back_when_protocol_unavailable(monkeypa
         staticmethod(lambda ip, pw, dev: (True, 'serial-1')))
     monkeypatch.setattr(
         ts.ToolService, 'get_advanced_device_info',
-        staticmethod(lambda d, i, p: ('MAC-FALLBACK', 'NAME', 'Android')))
+        staticmethod(lambda d, i, p, serial=None: ('MAC-FALLBACK', 'NAME', 'Android')))
     monkeypatch.setattr(
         ts.ToolService, 'get_version_info',
-        staticmethod(lambda d, i, p: ('OTA-FB', 'MAIN-FB')))
+        staticmethod(lambda d, i, p, serial=None: ('OTA-FB', 'MAIN-FB')))
 
     info = ts.ToolService._build_device_info('H16-00-0001', '192.168.1.8', 'pwd')
     assert info['mac_address'] == 'MAC-FALLBACK'
@@ -350,10 +350,10 @@ def test_build_device_info_list_path_does_not_force_adb(monkeypatch):
         staticmethod(lambda *a, **k: pytest.fail('不应调用 ensure_adb_connected')))
     monkeypatch.setattr(
         ts.ToolService, 'get_advanced_device_info',
-        staticmethod(lambda d, i, p: ('MAC', 'NAME', 'Android')))
+        staticmethod(lambda d, i, p, serial=None: ('MAC', 'NAME', 'Android')))
     monkeypatch.setattr(
         ts.ToolService, 'get_version_info',
-        staticmethod(lambda d, i, p: ('OTA', 'MAIN')))
+        staticmethod(lambda d, i, p, serial=None: ('OTA', 'MAIN')))
 
     info = ts.ToolService._build_device_info('H16-00-0001', '192.168.1.8', 'pwd',
                                              enable_adb_fallback=False)

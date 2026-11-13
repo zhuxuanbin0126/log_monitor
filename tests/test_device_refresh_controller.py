@@ -28,6 +28,12 @@ class _FakeManager:
     def submit_task(self, line):
         self.calls.append(line)
 
+    def has_pending(self):
+        return False
+
+    def stop(self, _timeout_ms=5000):
+        return True
+
 
 # ---------------------------------------------------------------- 增量上报
 
@@ -92,13 +98,14 @@ def test_device_found_submits_info_fetch_immediately():
 def test_found_submission_is_deduped_against_raw_list():
     controller = DeviceRefreshController()
     controller._dev_type = "H16"                  # pylint: disable=protected-access
-    controller._manager = _FakeManager()          # pylint: disable=protected-access
+    manager = _FakeManager()
+    controller._manager = manager                 # pylint: disable=protected-access
     # pylint: disable=protected-access
     controller._on_device_found("H16-26-A0419", "192.168.81.94")
     controller._on_raw_list(["H16-26-A0419 192.168.81.94", "H16-26-A000F 192.168.80.55"])
     # pylint: enable=protected-access
 
-    assert controller._manager.calls == [          # pylint: disable=protected-access
+    assert manager.calls == [
         "H16-26-A0419 192.168.81.94", "H16-26-A000F 192.168.80.55"]
     assert controller._submit_done is True         # pylint: disable=protected-access
 
@@ -134,6 +141,48 @@ def test_incremental_fetch_does_not_rebuild_table():
 
     assert ready == []
     assert controller._incremental is False        # pylint: disable=protected-access
+
+
+class _FakePendingManager(_FakeManager):
+    """可配置「是否仍有排队/在飞任务」的假信息池。"""
+
+    def __init__(self, pending):
+        super().__init__()
+        self.pending = pending
+
+    def has_pending(self):
+        return self.pending
+
+
+def test_raw_list_finishes_immediately_when_nothing_pending():
+    """扫描结束时补全已全部完成（或一台都没发现）→ 立即收尾，不必再等信号。"""
+    controller = DeviceRefreshController()
+    ready = []
+    controller.devices_ready.connect(ready.append)
+    controller._dev_type = "H16"                   # pylint: disable=protected-access
+    controller._manager = _FakePendingManager(False)   # pylint: disable=protected-access
+
+    controller._on_raw_list([])                    # pylint: disable=protected-access
+
+    assert ready == [[]]
+    assert controller._manager is None             # pylint: disable=protected-access
+
+
+def test_raw_list_waits_while_tasks_pending():
+    """仍有任务在跑 → 必须等补全完成再收尾（避免拿到不完整的设备列表）。"""
+    controller = DeviceRefreshController()
+    ready = []
+    controller.devices_ready.connect(ready.append)
+    controller._dev_type = "H16"                   # pylint: disable=protected-access
+    manager = _FakePendingManager(True)
+    controller._manager = manager                  # pylint: disable=protected-access
+
+    controller._on_raw_list(["H16-26-A0419 192.168.81.94"])   # pylint: disable=protected-access
+    assert ready == []
+    assert manager.calls == ["H16-26-A0419 192.168.81.94"]
+
+    controller._on_all_tasks_completed()           # pylint: disable=protected-access
+    assert len(ready) == 1
 
 
 def test_background_discovery_filters_devices(monkeypatch):
