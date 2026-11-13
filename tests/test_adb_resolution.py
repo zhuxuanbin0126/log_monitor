@@ -34,8 +34,14 @@ def test_resolution_status_reports_bundled():
     assert status["bundled_path"] == ADB_PATH
 
 
-def test_path_helpers_normalize_and_split():
-    assert path_setup._norm(r"D:\a\b\\") == path_setup._norm("d:/a/b")
+def test_norm_uses_windows_semantics():
+    """path_setup 只服务 Windows：_norm 固定用 ntpath，不随宿主 os.path 漂移。"""
+    assert path_setup._norm(r"D:\a\b\\") == r"d:\a\b"
+    assert path_setup._norm("d:/a/b") == r"d:\a\b"
+    assert path_setup._norm("") == ""
+
+
+def test_split_handles_windows_path_list():
     assert path_setup._split(r"C:\x; D:\y ;;") == [r"C:\x", r"D:\y"]
     assert path_setup._split("") == []
 

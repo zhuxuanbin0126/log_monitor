@@ -39,6 +39,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $zip = Get-ChildItem release/log_monitor_v*.zip | Select-Object -First 1
+          $zip = Get-ChildItem release/log_monitor_*_win64.zip | Select-Object -First 1
           gh release create "${{ github.ref_name }}" release/log_monitor.exe $zip.FullName `
             --title "${{ github.ref_name }}" --generate-notes

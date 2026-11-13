@@ -13,6 +13,7 @@ from .device_list_view import DeviceListView
 from .device_refresh_controller import DeviceRefreshController
 from .error_log_manager import ErrorLogManager
 from .excel_exporter import ExcelExporter
+from .format_utils import format_duration
 from .query_result_presenter import QueryResultPresenter
 from .result_display_view import ResultDisplayView
 from .monitor_thread import MonitorThread
@@ -822,17 +823,8 @@ class MainWindow(BaseWindow):
 
     @staticmethod
     def _format_duration(seconds):
-        """秒数 → 人类可读耗时：``12.3s`` / ``3分05秒`` / ``1时02分03秒``。"""
-        if seconds is None:
-            return "未知"
-        if seconds < 60:
-            return f"{seconds:.1f}s"
-        total = int(round(seconds))
-        hours, remainder = divmod(total, 3600)
-        minutes, secs = divmod(remainder, 60)
-        if hours:
-            return f"{hours}时{minutes:02d}分{secs:02d}秒"
-        return f"{minutes}分{secs:02d}秒"
+        """保留类内入口，实际格式化逻辑在 ui.format_utils（无 Qt 依赖，便于测试）。"""
+        return format_duration(seconds)
 
     # ---------------------------------------------------------------- 任务状态 / 中断 / 续跑
 

@@ -74,10 +74,11 @@ def test_summary_reports_elapsed():
 
 
 def test_format_duration_readable():
-    from ui.main_window import MainWindow
-    assert MainWindow._format_duration(12.34) == '12.3s'
-    assert MainWindow._format_duration(75) == '1分15秒'
-    assert MainWindow._format_duration(3723) == '1时02分03秒'
+    # 纯字符串逻辑放在无 Qt 依赖的模块里，Linux CI 不需要 libEGL/libGL
+    from ui.format_utils import format_duration
+    assert format_duration(12.34) == '12.3s'
+    assert format_duration(75) == '1分15秒'
+    assert format_duration(3723) == '1时02分03秒'
 
 
 def test_excel_exporter_writes_file(monkeypatch, tmp_path):

@@ -14,6 +14,7 @@
 - 已有则不做任何动作；任何异常都只记一行 app.log 后降级为"不处理"。
 """
 
+import ntpath
 import os
 
 from .logging_service import get_logger
@@ -22,10 +23,16 @@ logger = get_logger(__name__)
 
 
 def _norm(path: str) -> str:
-    """规范化用于比较的目录：绝对路径 + 小写 + 去掉尾部反斜杠。"""
+    """按 **Windows 路径语义** 规范化目录，用于 PATH 条目比较。
+
+    本模块只服务 Windows（随包 ``tools/bin/*.exe``、PATH 以 ``;`` 分隔），因此这里
+    显式使用 :mod:`ntpath` 而不是 :mod:`os.path`：反斜杠归一、大小写折叠、去掉尾部
+    分隔符的行为在 Windows / Linux 宿主机上完全一致，避免测试或 CI 随宿主平台漂移。
+    """
     if not path:
         return ""
-    return os.path.normcase(os.path.abspath(os.path.expandvars(path.strip()))).rstrip("\\")
+    expanded = os.path.expandvars(path.strip())
+    return ntpath.normcase(ntpath.abspath(expanded)).rstrip("\\")
 
 
 def _split(value: str):
