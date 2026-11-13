@@ -1,6 +1,6 @@
 # 设备监控系统 (Log Monitor)
 
-基于PyQt5的专业设备监控桌面应用程序，支持设备发现、SSH连接、实时监控、数据记录、异常告警和屏幕截图等完整功能。
+基于 **PySide6 6.8（Qt 6）** 的专业设备监控桌面应用程序，支持设备发现、SSH/ADB 连接、实时监控、数据记录、异常告警和屏幕截图等完整功能。
 
 ## 🚀 核心功能
 
@@ -26,7 +26,7 @@
 - **设备授权处理**：遇到"device unauthorized"错误时，自动通过SSH执行命令重启ADB服务，解决授权问题
 
 ### 5. 用户友好界面
-- **现代化UI**：基于PyQt5的现代化图形界面
+- **现代化UI**：基于 PySide6 6.8（Qt 6）的现代化图形界面
 - **实时状态显示**：状态栏实时显示监控状态和设备数量
 - **彩色日志**：正常消息(黑色)、警告消息(黄色)、错误消息(红色)
 - **批量操作**：支持设备多选、全选、批量查询和监控
@@ -46,8 +46,12 @@ log_monitor/
 │   ├── tool_service.py           # 工具门面：命令执行、SSH、设备密码、ADB 委托
 │   ├── adb_service.py            # ADB 操作：连接、推送、拉取、MD5、权限
 │   ├── adb_device_manager.py     # ADB 状态管理：分类、缓存、连接池、批量开启
-│   ├── device_utils.py           # 共享工具：命令执行、MD5、设备分类、重试装饰器
+│   ├── device_utils.py           # 共享工具：命令执行、MD5、设备分类、ADB_CMD 解析
+│   ├── device_cache.py           # 设备信息本地缓存（7 天 TTL + 启动清理）
+│   ├── path_setup.py             # 启动时把 tools/bin 注入当前进程 PATH
+│   ├── protocol/                 # MagicPlayer 协议：找卡应答、设备信息查询
 │   ├── transports.py             # 传输层抽象：ADB / SSH 可替换实现
+│   ├── linux_version.py          # Linux 机型版本文件读取
 │   ├── logging_service.py        # 统一日志：文件轮转 + 开发态控制台
 │   ├── data_processing_service.py # 数据处理：运行时间解析、错误消息格式化
 │   └── file_service.py           # 文件服务：日志读写、错误记录、数据持久化
@@ -58,7 +62,9 @@ log_monitor/
 │   └── query_dispatcher.py       # 查询/操作策略分发表
 ├── ui/                           # 视图层 - 用户界面组件
 │   ├── main_window.py            # 主窗口：组装视图与信号路由
-│   ├── device_refresh_controller.py # 设备刷新控制器
+│   ├── device_refresh_controller.py # 设备刷新控制器（发现即补全）
+│   ├── reflash_device_threadpool.py # 设备信息补全线程池
+│   ├── workers/                  # 找卡/后台心跳 worker
 │   ├── error_log_manager.py      # 错误分类、落盘与查看
 │   ├── excel_exporter.py         # 监控结果 Excel 导出
 │   ├── query_result_presenter.py # 查询结果与汇总展示
@@ -68,9 +74,9 @@ log_monitor/
 │   ├── result_display_view.py    # 结果显示视图：彩色日志显示
 │   ├── monitor_thread.py         # 监控线程：后台监控任务
 │   ├── serial_query_manager.py   # 串行/并行查询管理器
-│   ├── reflash_device_threadpool.py # 设备刷新线程池
 │   └── base_window.py            # 基础窗口类
 ├── tools/                         # 工具脚本和配置文件
+│   ├── bin/                      # adb.exe / AdbWinApi.dll / AdbWinUsbApi.dll 等随包工具
 │   ├── boot_counter.sh           # 开关机计数器脚本
 │   ├── getdeviceinfo.sh          # 设备信息获取脚本
 │   ├── init.huidu.rc             # 初始化配置文件
@@ -80,7 +86,8 @@ log_monitor/
 ├── output/                        # 输出目录
 │   ├── logs/                     # 日志文件目录
 │   ├── excel/                    # Excel文件目录
-│   └── screenshot/               # 截图文件目录
+│   ├── screenshot/               # 截图文件目录
+│   └── device_info_cache.json    # 设备信息缓存（自动生成，可删除）
 ├── config.py                     # 配置文件：路径、阈值、设备类型配置
 ├── device_config.py              # 设备型号配置加载（device_info.json）
 ├── data_models.py                # 数据模型：DeviceState / MonitorConfig / OperationResult
@@ -122,58 +129,59 @@ python tools/build_release.py              # 打包 + SHA256 + zip
 
 ## 📋 系统要求
 
+### 运行环境（发布包）
+- **操作系统**：Windows 10 1809 及以上 / Windows 11，**64 位**
+- 无需安装 Python、Qt 或 adb；发布包自带 Python 3.11 与 Qt 6 运行时
+- 网络连通（与被监控设备同一网段，或可达 `UDP 9527` / `TCP 10001` / `22` / `5555`）
+
 ### 开发环境
-- Python 3.11（推荐，CI 同版本）
-- Windows 7/10/11
-- 网络连接（用于设备通信）
+- **Python 3.11.9**（与发布构建、CI 同版本）
+- **PySide6 6.8.3**（Qt 6）
+- 建议使用仓库内虚拟环境 `D:\log_monitor\20261019\.venv`
 
 ### 运行时依赖
 ```bash
-# 核心Python包
-PyQt5==5.15.9    # 图形界面框架
-pandas==2.1.0    # 数据处理和Excel导出
-openpyxl==3.1.2  # Excel文件操作
+# 核心 Python 包（见 requirements.txt）
+PySide6==6.8.3   # 图形界面框架（Qt 6）
+openpyxl==3.1.2  # Excel 文件操作（直写，不依赖 pandas）
 paramiko==3.5.1  # SSH（不可用时自动回退 plink）
+cryptography>=3.3 # 协议加密通道（AES-128-CBC）
 
 # 内置工具（位于 tools/bin，随发布包一起分发）
-DeviceId.exe     # 设备发现工具
-adb.exe          # Android 调试桥
-plink.exe        # SSH 连接工具
-pscp.exe         # 文件传输工具
+DeviceId.exe     # 设备发现工具（DeviceId.exe 回退通道）
+adb.exe          # Android 调试桥（程序固定使用随包这一份）
+AdbWinApi.dll / AdbWinUsbApi.dll  # adb 依赖库
+plink.exe / pscp.exe              # SSH 连接与文件传输
 ```
 
 ## 🚀 快速开始
 
 ### 方式一：源码运行（开发模式）
 ```bash
-# 1. 克隆或下载项目
-cd <项目目录>
+# 1. 进入项目目录
+cd D:\log_monitor\20261019
 
-# 2. 安装Python依赖
-pip install -r requirements.txt
+# 2. 使用仓库自带虚拟环境（Python 3.11.9 + PySide6 6.8.3）
+.venv\Scripts\python.exe main.py
 
-# 3. 运行应用程序
-python main.py
+# 或自行创建环境后安装依赖
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 ### 方式二：打包分发（生产环境）
 ```bash
-# 一键打包 + 校验 + 发布包（推荐）
-python tools/build_release.py
+# 一键打包 + 版本校验 + 发布包（推荐）
+.venv\Scripts\python.exe tools\build_release.py
 
 # 或仅调用 PyInstaller（产物在 dist/log_monitor.exe）
-pip install pyinstaller
-pyinstaller log_monitor.spec
+.venv\Scripts\python.exe -m pip install pyinstaller
+.venv\Scripts\python.exe -m PyInstaller log_monitor.spec
 ```
 
-### 方式三：Python包安装
-```bash
-# 安装到Python环境
-pip install .
-
-# 运行应用程序
-log-monitor-gui
-```
+### 方式三：解压即用（发布包）
+1. 解压 `log_monitor_<版本>_win64.zip`（**保留 `tools/` 目录**）
+2. 双击 `log_monitor.exe` 启动
+3. 首次启动会在 `output/` 下生成日志与设备信息缓存
 
 ## 📊 使用指南
 
@@ -230,6 +238,8 @@ log-monitor-gui
 ### 数据文件
 - `device_monitoring_data.json`：设备监控数据持久化存储
 - `device_error.txt`：设备错误日志记录
+- `output/device_info_cache.json`：设备信息本地缓存（按设备 ID 保存 MAC/设备名/版本/ADB 状态，
+  **不含密码**；带 `added_at` / `last_seen_at` 时间；7 天未成功查询会在下次启动时自动清理）
 - `output/logs/目录`：包含cardtime.log、uptime.log、startcount.log、comprehensive.log等日志文件
 - `output/excel/目录`：存储监控结果的Excel文件
 - `output/screenshot/目录`：按设备ID分类的截图文件
@@ -263,7 +273,7 @@ pyinstaller log_monitor.spec
 - `README.md`、`用户手册.md`、`用户手册.pdf`、`CHANGELOG.md`
 - `发布说明_V<版本号>.md`：当前版本的发布说明（功能、性能、修复、升级须知）
 - `SHA256SUMS.txt`：逐文件 SHA256 校验清单
-- `log_monitor_vX.Y.Z.W.zip`：完整发布压缩包
+- `log_monitor_<版本>_win64.zip`：完整发布压缩包
 
 ## 🐛 常见问题
 
@@ -280,7 +290,7 @@ pyinstaller log_monitor.spec
 **A**: 检查设备网络连接，尝试调整监控间隔，确保设备密码正确
 
 ### Q5: Excel导出失败
-**A**: 确保有写入权限，检查pandas库是否正常安装，确保output/excel目录存在
+**A**: 确保有写入权限，检查 openpyxl 是否随包正常（Excel 由 openpyxl 直写，不依赖 pandas），确保output/excel目录存在
 
 ### Q6: 截图失败
 **A**: 检查设备是否支持截图（仅支持H6、H8、H4K、B6L、B8L、A4L、A5L、A6L、C16H），确保adb.exe和相关DLL文件存在
@@ -288,9 +298,28 @@ pyinstaller log_monitor.spec
 ### Q7: 设备未授权错误
 **A**: 程序会自动处理此问题，通过SSH执行命令重启ADB服务，无需手动干预
 
+### Q8: 机器上装了 scrcpy / Android Studio，adb 版本冲突怎么办
+**A**: 程序所有 adb 调用都固定使用随包的 `tools/bin/adb.exe`，不受系统 PATH 影响；
+若该文件缺失，启动日志会告警并回退系统 `adb`，请补齐 `tools/bin`（含
+`AdbWinApi.dll`、`AdbWinUsbApi.dll`）。启动时还会把 `tools/bin` 前置到
+**当前进程**的 PATH（不写注册表、不改系统环境变量，只对本程序生效）。
+
+### Q9: 设备列表里显示的信息是旧值 / 设备离线
+**A**: 命中本地缓存（`output/device_info_cache.json`）时会先显示上次成功查询的信息，
+随后由真实查询覆盖；设备离线时可能持续显示旧值。记录超过 7 天未成功查询会在下次启动时
+被自动清理。需要强制重取可删除该缓存文件后重启程序。
+
 ## 📝 更新日志
 
-### v1.0.6.3 (当前版本)
+### v1.0.7.0 (当前版本)
+- ✅ 界面框架 PyQt5 5.15 → **PySide6 6.8（Qt 6）** 迁移，界面与 QSS 保持原样；运行环境统一为 Python 3.11.9 + PySide6 6.8.3
+- ✅ adb 调用固定走随包 `tools/bin/adb.exe`（源码/打包两种形态自动识别），不再被系统 PATH 中其它 adb 抢占；路径含空格自动加引号，子进程隐藏控制台
+- ✅ 启动时把 `tools/bin` 注入**当前进程** PATH（不写注册表、不广播环境变更、已有则零动作，仅记一行 app.log）
+- ✅ 新增设备信息本地缓存（`output/device_info_cache.json`）：带 `added_at` / `last_seen_at`，7 天未成功查询在启动后台静默清理
+- ✅ 设备信息补全提速：缓存命中提交即上表（离线桩实测首屏 1290~1308ms → 50~53ms）、adb 回落连接复用、队列即时补位、重试改两档分级
+- ✅ 新增回归测试覆盖：adb 解析、进程内 PATH、缓存时间字段与 7 天边界、补全流水线
+
+### v1.0.6.3
 - ✅ 修复 Android 设备「开关机次数」恒为 0：`/data` 下计数器文件为 root `0600`，`adb shell` 无读权限 → adb 命令公共出口遇 `Permission denied` 自动 `adb root` 后重跑（真机 A5L-A00-A1102 由 0 修正为 1）
 - ✅ 计数口径修正：「文件不存在」= 合法 0，「文件存在但读不到」= 判失败，不再把「没读到」显示成 0
 - ✅ 新增 4 个回归用例覆盖上述两条
